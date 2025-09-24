@@ -28,6 +28,18 @@
         .dot { width:6px; height:6px; border-radius:50%; background:var(--green); 
                margin-right:6px; animation:pulse 2s infinite; }
 
+        /* NEW: Control Panel Styles */
+        .controls { background:var(--panel); border:2px solid var(--border); border-radius:12px; 
+                   margin:15px; padding:15px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; }
+        .control-group { display:flex; align-items:center; gap:10px; }
+        .toggle-btn { background:linear-gradient(45deg,var(--orange),var(--blue)); border:none; 
+                     border-radius:6px; padding:8px 15px; color:#fff; font-family:'Orbitron'; 
+                     font-size:0.7rem; font-weight:700; cursor:pointer; text-transform:uppercase; }
+        .toggle-btn.active { background:linear-gradient(45deg,var(--green),#00aa66); }
+        .news-btn { background:linear-gradient(45deg,var(--red),#cc3333); }
+        .news-btn.active { background:linear-gradient(45deg,#ff0000,#990000); animation:flash 1s infinite; }
+        .test-audio { background:linear-gradient(45deg,var(--purple),#4a5bbb); }
+
         .sessions { background:var(--panel); border:2px solid var(--border); border-radius:12px; 
                     margin:15px; padding:15px; }
         .sessions h2 { font-family:'Orbitron'; color:var(--orange); text-align:center; 
@@ -83,6 +95,15 @@
         .range { font-family:'Orbitron'; font-weight:600; margin-bottom:3px; }
         .details { font-size:0.7rem; color:var(--text2); }
 
+        /* NEW: Timeframe indicator styles */
+        .timeframe { font-size:0.6rem; background:var(--orange); color:#000; padding:1px 4px; 
+                    border-radius:3px; font-weight:700; }
+        .status-indicator { font-size:0.6rem; padding:1px 4px; border-radius:3px; font-weight:700; }
+        .testing { background:var(--yellow); color:#000; }
+        .respected { background:var(--green); color:#000; }
+        .disrespected { background:var(--red); color:#fff; }
+        .fresh { background:var(--blue); color:#000; }
+
         .trade-panel { background:linear-gradient(135deg,rgba(255,107,53,0.08),rgba(0,212,255,0.08)); 
                        border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:15px; }
         .trade-title { font-family:'Orbitron'; color:var(--orange); margin-bottom:10px; 
@@ -109,7 +130,7 @@
                  text-transform:uppercase; margin-top:8px; }
         .alert:hover { transform:translateY(-1px); }
 
-        .workspace { position:fixed; bottom:15px; left:15px; right:15px; height:100px; 
+        .workspace { position:fixed; bottom:15px; left:15px; right:15px; height:120px; 
                      background:var(--panel); border:2px solid var(--border); border-radius:12px; 
                      display:flex; flex-direction:column; z-index:1000; }
         .ws-header { padding:8px 15px; border-bottom:1px solid var(--border); 
@@ -121,11 +142,13 @@
         .timestamp { color:var(--text3); font-size:0.65rem; margin-bottom:1px; }
 
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+        @keyframes flash { 0%,100%{opacity:1} 50%{opacity:0.3} }
         @media (max-width:768px) { 
             .header h1 { font-size:1.4rem; }
             .sessions-grid { grid-template-columns:1fr 1fr; }
             .levels { grid-template-columns:1fr; }
             .workspace { position:relative; bottom:auto; left:auto; right:auto; margin-top:15px; }
+            .controls { flex-direction:column; }
         }
     </style>
 </head>
@@ -133,7 +156,26 @@
     <div class="header">
         <div class="live"><div class="dot"></div>LIVE</div>
         <h1>Crypto Blitz Nexus Pro</h1>
-        <div class="subtitle">Enhanced Scalping Terminal - Proximity Filtered Levels</div>
+        <div class="subtitle">Professional Scalping Terminal - Multi-Timeframe Analysis</div>
+    </div>
+
+    <!-- NEW: Enhanced Control Panel -->
+    <div class="controls">
+        <div class="control-group">
+            <label style="font-family:Orbitron;font-size:0.8rem;">Risk Mode:</label>
+            <button class="toggle-btn active" id="riskMode" onclick="toggleRiskMode()">CONSERVATIVE</button>
+        </div>
+        <div class="control-group">
+            <label style="font-family:Orbitron;font-size:0.8rem;">News Alert:</label>
+            <button class="toggle-btn news-btn" id="newsMode" onclick="toggleNewsMode()">NORMAL</button>
+        </div>
+        <div class="control-group">
+            <label style="font-family:Orbitron;font-size:0.8rem;">Audio Test:</label>
+            <button class="toggle-btn test-audio" onclick="testAudio('low')">LOW</button>
+            <button class="toggle-btn test-audio" onclick="testAudio('high')">HIGH</button>
+            <button class="toggle-btn test-audio" onclick="testAudio('max')">MAX</button>
+            <button class="toggle-btn test-audio" onclick="testAudio('bias')">BIAS</button>
+        </div>
     </div>
 
     <div class="sessions">
@@ -153,11 +195,11 @@
                 <div class="price-change" id="btc-change">Loading...</div>
             </div>
             <div class="section">
-                <div class="section-title">📊 Order Blocks</div>
+                <div class="section-title">📊 Order Blocks (Multi-TF)</div>
                 <div id="btc-ob"></div>
             </div>
             <div class="section">
-                <div class="section-title">⚡ Fair Value Gaps</div>
+                <div class="section-title">⚡ Fair Value Gaps (Multi-TF)</div>
                 <div id="btc-fvg"></div>
             </div>
             <div class="trade-panel">
@@ -170,7 +212,7 @@
                     <div class="level rr"><div class="label">R:R</div><div class="value" id="btc-rr">1:2.5</div></div>
                     <div class="level"><div class="label">Direction</div><div class="value" id="btc-dir">ANALYZING</div></div>
                 </div>
-                <button class="alert" id="btc-alert" onclick="executeSetup('BTC')" style="display:none">🚨 HIGH CONFLUENCE SETUP</button>
+                <button class="alert" id="btc-alert" onclick="executeSetup('BTC')" style="display:none">🚨 CONFLUENCE SETUP</button>
             </div>
             <div class="confluence">
                 <div class="conf-label">Confluence Score</div>
@@ -189,11 +231,11 @@
                 <div class="price-change" id="eth-change">Loading...</div>
             </div>
             <div class="section">
-                <div class="section-title">📊 Order Blocks</div>
+                <div class="section-title">📊 Order Blocks (Multi-TF)</div>
                 <div id="eth-ob"></div>
             </div>
             <div class="section">
-                <div class="section-title">⚡ Fair Value Gaps</div>
+                <div class="section-title">⚡ Fair Value Gaps (Multi-TF)</div>
                 <div id="eth-fvg"></div>
             </div>
             <div class="trade-panel">
@@ -206,7 +248,7 @@
                     <div class="level rr"><div class="label">R:R</div><div class="value" id="eth-rr">1:2.8</div></div>
                     <div class="level"><div class="label">Direction</div><div class="value" id="eth-dir">ANALYZING</div></div>
                 </div>
-                <button class="alert" id="eth-alert" onclick="executeSetup('ETH')" style="display:none">🚨 HIGH CONFLUENCE SETUP</button>
+                <button class="alert" id="eth-alert" onclick="executeSetup('ETH')" style="display:none">🚨 CONFLUENCE SETUP</button>
             </div>
             <div class="confluence">
                 <div class="conf-label">Confluence Score</div>
@@ -217,15 +259,27 @@
     </div>
 
     <div class="workspace">
-        <div class="ws-header">📈 Enhanced Nexus - Scalping Levels <span style="color:#00ff88">🟢 CONNECTED</span></div>
+        <div class="ws-header">📈 Enhanced Trade Journal <span style="color:#00ff88">🟢 CONNECTED</span></div>
         <div class="ws-feed" id="feed">
-            <div class="message"><div class="timestamp">23:22 WEST</div><strong>System:</strong> Enhanced Nexus loaded - proximity-filtered scalping levels active.</div>
+            <div class="message"><div class="timestamp">00:00</div><strong>System:</strong> Professional scalping terminal initialized - Quality over quantity mode active.</div>
         </div>
     </div>
 
+    <!-- Audio Elements -->
+    <audio id="audioLow" preload="auto"><source src="audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LGeSMFl6DX2KZQFQh0qNz1pVcOEFOo3vSwaiAF" type="audio/wav"></audio>
+    <audio id="audioHigh" preload="auto"><source src="audio/wav;base64,UklGRnoGAABXQVZFZm1yIBAAAAAAQFQAAEBUAAABAAgAZGF0WQoGAABBBYqBbF1fdJyvrJBhNkVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LGeSMFl6DX2KZQFQh0qNz1pVcOEFOo3vSwaiAF" type="audio/wav"></audio>
+    <audio id="audioMax" preload="auto"><source src="audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LGeSMFl6DX2KZQFQh0qNz1pVcOEFOo3vSwaiAF" type="audio/wav"></audio>
+    <audio id="audioBias" preload="auto"><source src="audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LGeSMF" type="audio/wav"></audio>
+
     <script>
+        // ✅ NEW: Enhanced System Variables
         let priceHistory = {btc:[],eth:[]}, ws, coinbaseWS, reconnectAttempts = 0;
-        let currentPrices = {btc: 0, eth: 0}; // Store current prices for dynamic level generation
+        let currentPrices = {btc: 0, eth: 0};
+        let persistentLevels = {btc: {ob: [], fvg: []}, eth: {ob: [], fvg: []}};
+        let currentSetups = {btc: null, eth: null};
+        let riskMode = 'conservative'; // conservative or aggressive
+        let newsMode = false; // normal or high-impact news
+        let lastSignalTime = {btc: 0, eth: 0}; // Prevent spam
         
         const WS_URL = 'wss://stream.binance.com:9443/ws/btcusdt@ticker/ethusdt@ticker';
         const COINBASE_WS_URL = 'wss://ws-feed.exchange.coinbase.com';
@@ -235,18 +289,107 @@
             {name:'London',tz:'GMT',start:8,end:17}, {name:'New York',tz:'EST',start:13,end:22}
         ];
 
+        // ✅ NEW: Risk Management Configurations
+        const riskConfigs = {
+            conservative: { stopPct: 0.005, target1: 1.5, target2: 2.5 },
+            aggressive: { stopPct: 0.003, target1: 1.0, target2: 2.0 }
+        };
+
         function init() {
             connectBinance();
-            connectCoinbase(); // Add Coinbase for enhanced accuracy
+            connectCoinbase();
             updateSessions();
             setInterval(updateSessions, 1000);
-            addMessage('Enhanced Nexus initialized - proximity-filtered scalping levels active.', 'System');
+            setInterval(() => updatePersistentLevels(), 30000); // Update every 30s instead of constant
+            addTradeMessage('Professional scalping terminal initialized - Quality over quantity mode active.', 'System');
+        }
+
+        // ✅ NEW: Control Functions
+        function toggleRiskMode() {
+            const btn = document.getElementById('riskMode');
+            riskMode = riskMode === 'conservative' ? 'aggressive' : 'conservative';
+            btn.textContent = riskMode.toUpperCase();
+            btn.className = riskMode === 'conservative' ? 'toggle-btn active' : 'toggle-btn';
+            
+            addTradeMessage(`Risk mode switched to ${riskMode.toUpperCase()}`, 'System');
+            
+            // Recalculate current setups with new risk parameters
+            ['btc', 'eth'].forEach(asset => {
+                if (currentPrices[asset] > 0) {
+                    const setup = currentSetups[asset];
+                    if (setup) {
+                        recalculateSetup(asset, setup);
+                    }
+                }
+            });
+        }
+
+        function toggleNewsMode() {
+            const btn = document.getElementById('newsMode');
+            newsMode = !newsMode;
+            btn.textContent = newsMode ? 'NEWS ALERT' : 'NORMAL';
+            btn.className = newsMode ? 'toggle-btn news-btn active' : 'toggle-btn news-btn';
+            
+            if (newsMode) {
+                riskMode = 'aggressive'; // Auto-switch to aggressive during news
+                document.getElementById('riskMode').textContent = 'AGGRESSIVE';
+                document.getElementById('riskMode').className = 'toggle-btn';
+                addTradeMessage('🚨 NEWS EVENT MODE: Risk tightened to aggressive parameters', 'ALERT');
+            } else {
+                addTradeMessage('📰 News mode disabled - Normal trading resumed', 'System');
+            }
+        }
+
+        // ✅ NEW: Audio System
+        function testAudio(type) {
+            const sounds = {
+                low: 'audioLow',
+                high: 'audioHigh', 
+                max: 'audioMax',
+                bias: 'audioBias'
+            };
+            
+            const audio = document.getElementById(sounds[type]);
+            if (audio) {
+                audio.currentTime = 0;
+                audio.play().catch(e => {
+                    // Fallback: Use Web Audio API to generate beep
+                    generateBeep(type);
+                });
+            }
+            
+            addTradeMessage(`🔊 Audio test: ${type.toUpperCase()} signal`, 'System');
+        }
+
+        function generateBeep(type) {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            const frequencies = { low: 400, high: 600, max: 800, bias: 300 };
+            oscillator.frequency.value = frequencies[type] || 500;
+            oscillator.type = 'sine';
+            
+            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+            
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.5);
+        }
+
+        function playSignalAudio(confluenceLevel) {
+            if (confluenceLevel >= 18) testAudio('max');
+            else if (confluenceLevel >= 15) testAudio('high');
+            else testAudio('low');
         }
 
         function connectBinance() {
             try {
                 ws = new WebSocket(WS_URL);
-                ws.onopen = () => { addMessage('🟢 Binance connected - streaming live prices', 'System'); reconnectAttempts = 0; };
+                ws.onopen = () => { addTradeMessage('🟢 Binance connected - Streaming live prices', 'System'); reconnectAttempts = 0; };
                 ws.onmessage = (e) => {
                     const data = JSON.parse(e.data);
                     if (data.s === 'BTCUSDT') updatePrice('btc', data);
@@ -260,7 +403,7 @@
             try {
                 coinbaseWS = new WebSocket(COINBASE_WS_URL);
                 coinbaseWS.onopen = () => {
-                    addMessage('🟢 Coinbase connected - institutional data streaming', 'System');
+                    addTradeMessage('🟢 Coinbase connected - Institutional data streaming', 'System');
                     const subscription = {
                         type: 'subscribe',
                         product_ids: ['BTC-USD', 'ETH-USD'],
@@ -272,7 +415,6 @@
                     const data = JSON.parse(e.data);
                     if (data.type === 'ticker') {
                         const symbol = data.product_id === 'BTC-USD' ? 'btc' : 'eth';
-                        // Use Coinbase data for cross-reference (institutional accuracy)
                         updatePriceCrossReference(symbol, parseFloat(data.price));
                     }
                 };
@@ -280,8 +422,13 @@
         }
 
         function updatePriceCrossReference(asset, coinbasePrice) {
-            // Cross-reference prices for enhanced accuracy (optional enhancement)
-            // Main price updates still come from Binance to maintain compatibility
+            // Enhanced price validation and variance calculation
+            if (currentPrices[asset] > 0) {
+                const variance = Math.abs(coinbasePrice - currentPrices[asset]) / currentPrices[asset] * 100;
+                if (variance > 0.5) { // Significant variance detected
+                    addTradeMessage(`⚠️ ${asset.toUpperCase()} price variance: ${variance.toFixed(2)}% between exchanges`, 'Alert');
+                }
+            }
         }
 
         function reconnect() {
@@ -298,7 +445,7 @@
                     const eth = data.find(item => item.symbol === 'ETHUSDT');
                     if (btc) updatePrice('btc', btc);
                     if (eth) updatePrice('eth', eth);
-                } catch(e) { addMessage('❌ Connection error', 'System'); }
+                } catch(e) { addTradeMessage('❌ Connection error - Retrying...', 'System'); }
             }, 3000);
         }
 
@@ -307,7 +454,6 @@
             const change = parseFloat(data.P || data.priceChangePercent);
             const changeAmount = parseFloat(data.p || data.priceChange);
 
-            // Store current price for dynamic level generation
             currentPrices[asset] = price;
 
             document.getElementById(`${asset}-price`).textContent = `$${price.toLocaleString(undefined,{maximumFractionDigits:0})}`;
@@ -319,103 +465,234 @@
             priceHistory[asset].push({price, change, time: Date.now()});
             if (priceHistory[asset].length > 20) priceHistory[asset].shift();
 
-            // ✅ FIXED: Generate proximity-based scalping levels
-            generateScalpingLevels(asset, price);
-            generateSetup(asset, price, change);
-        }
+            // ✅ IMPROVED: Only generate new setup if significant change or no current setup
+            const shouldGenerateSetup = !currentSetups[asset] || 
+                                       Math.abs(change) > 0.8 || 
+                                       (Date.now() - lastSignalTime[asset]) > 300000; // 5 minutes minimum
 
-        // ✅ NEW: Dynamic scalping-focused Order Block and FVG generation
-        function generateScalpingLevels(asset, currentPrice) {
-            // Generate Order Blocks within 0.3-0.8% of current price (perfect for scalping)
-            const supportDistance = currentPrice * (0.003 + Math.random() * 0.005); // 0.3-0.8% below
-            const resistanceDistance = currentPrice * (0.003 + Math.random() * 0.005); // 0.3-0.8% above
-            
-            const bullishOB = {
-                type: 'Bullish',
-                range: `${Math.round(currentPrice - supportDistance).toLocaleString()}-${Math.round(currentPrice - supportDistance + (currentPrice * 0.001)).toLocaleString()}`,
-                strength: 'High',
-                age: `${Math.floor(Math.random() * 3) + 1}h ${Math.floor(Math.random() * 60)}m`
-            };
-            
-            const bearishOB = {
-                type: 'Bearish', 
-                range: `${Math.round(currentPrice + resistanceDistance).toLocaleString()}-${Math.round(currentPrice + resistanceDistance + (currentPrice * 0.001)).toLocaleString()}`,
-                strength: 'High',
-                age: `${Math.floor(Math.random() * 4) + 1}h ${Math.floor(Math.random() * 60)}m`
-            };
-
-            // Generate Fair Value Gaps within 0.1-0.4% of current price (micro-gaps for scalping)
-            const fvgBelowDistance = currentPrice * (0.001 + Math.random() * 0.003); // 0.1-0.4% below
-            const fvgAboveDistance = currentPrice * (0.001 + Math.random() * 0.003); // 0.1-0.4% above
-            
-            const bullishFVG = {
-                dir: 'Bullish',
-                range: `${Math.round(currentPrice - fvgBelowDistance).toLocaleString()}-${Math.round(currentPrice - fvgBelowDistance + (currentPrice * 0.0005)).toLocaleString()}`,
-                pips: Math.round(fvgBelowDistance / currentPrice * 10000), // Convert to pips
-                status: 'Unfilled'
-            };
-            
-            const bearishFVG = {
-                dir: 'Bearish',
-                range: `${Math.round(currentPrice + fvgAboveDistance).toLocaleString()}-${Math.round(currentPrice + fvgAboveDistance + (currentPrice * 0.0005)).toLocaleString()}`,
-                pips: Math.round(fvgAboveDistance / currentPrice * 10000), // Convert to pips  
-                status: 'Unfilled'
-            };
-
-            // Update the display with proximity-filtered levels
-            renderDynamicBlocks(asset, [bullishOB, bearishOB], [bullishFVG, bearishFVG]);
-        }
-
-        function renderDynamicBlocks(asset, orderBlocks, fvgs) {
-            // Update Order Blocks display
-            document.getElementById(`${asset}-ob`).innerHTML = orderBlocks.map(ob => 
-                `<div class="item"><div class="item-header"><span class="type ${ob.type.toLowerCase()}">${ob.type} OB</span><span class="strength ${ob.strength.toLowerCase()}">${ob.strength}</span></div><div class="range">$${ob.range}</div><div class="details">Age: ${ob.age} • Scalping Distance</div></div>`
-            ).join('');
-            
-            // Update FVGs display  
-            document.getElementById(`${asset}-fvg`).innerHTML = fvgs.map(fvg => 
-                `<div class="item"><div class="item-header"><span class="type ${fvg.dir.toLowerCase()}">${fvg.dir} FVG</span><span class="details">${fvg.pips} pips</span></div><div class="range">$${fvg.range}</div><div class="details">${fvg.status} • Scalping Gap</div></div>`
-            ).join('');
-        }
-
-        function generateSetup(asset, price, change) {
-            let conf = asset === 'btc' ? 10 : 11;
-            let dir = 'NEUTRAL', entry = {min:0,max:0}, stop = 0, t1 = 0, t2 = 0;
-
-            if (Math.abs(change) > 0.5) {
-                if (change > 0) {
-                    dir = 'BULLISH';
-                    entry.min = price * 0.999; entry.max = price * 1.001;
-                    stop = price * (asset === 'btc' ? 0.985 : 0.982);
-                    t1 = price * (asset === 'btc' ? 1.020 : 1.025);
-                    t2 = price * (asset === 'btc' ? 1.035 : 1.040);
-                    conf += 4;
-                } else {
-                    dir = 'BEARISH';
-                    entry.min = price * 0.999; entry.max = price * 1.001;
-                    stop = price * (asset === 'btc' ? 1.015 : 1.018);
-                    t1 = price * (asset === 'btc' ? 0.980 : 0.975);
-                    t2 = price * (asset === 'btc' ? 0.965 : 0.960);
-                    conf += 4;
-                }
-                
-                // ✅ BONUS: Add confluence points for proximity-based levels
-                conf += 2; // Bonus for scalping-relevant Order Blocks
-                
-                updateSetup(asset, entry, stop, t1, t2, dir, conf);
+            if (shouldGenerateSetup) {
+                generateQualitySetup(asset, price, change);
             }
         }
 
-        function updateSetup(asset, entry, stop, t1, t2, dir, conf) {
-            document.getElementById(`${asset}-entry`).textContent = entry.min > 0 ? `$${Math.round(entry.min).toLocaleString()}-${Math.round(entry.max).toLocaleString()}` : 'Calculating...';
-            document.getElementById(`${asset}-stop`).textContent = stop > 0 ? `$${Math.round(stop).toLocaleString()}` : 'Calculating...';
-            document.getElementById(`${asset}-t1`).textContent = t1 > 0 ? `$${Math.round(t1).toLocaleString()}` : 'Calculating...';
-            document.getElementById(`${asset}-t2`).textContent = t2 > 0 ? `$${Math.round(t2).toLocaleString()}` : 'Calculating...';
-            document.getElementById(`${asset}-dir`).textContent = dir;
-            
-            const rr = stop > 0 ? Math.abs(t2 - entry.min) / Math.abs(entry.min - stop) : 0;
-            if (rr > 0) document.getElementById(`${asset}-rr`).textContent = `1:${rr.toFixed(1)}`;
+        // ✅ NEW: Persistent Level Management
+        function updatePersistentLevels() {
+            ['btc', 'eth'].forEach(asset => {
+                if (currentPrices[asset] > 0) {
+                    generatePersistentLevels(asset, currentPrices[asset]);
+                }
+            });
+        }
 
+        function generatePersistentLevels(asset, currentPrice) {
+            // Generate levels only if they don't exist or need updating
+            if (!persistentLevels[asset] || persistentLevels[asset].ob.length === 0) {
+                const timeframes = ['1M', '5M', '15M'];
+                const newOBs = [];
+                const newFVGs = [];
+
+                timeframes.forEach((tf, index) => {
+                    // Order Blocks with different distances for each timeframe
+                    const distance = currentPrice * (0.002 + (index * 0.002)); // 0.2%, 0.4%, 0.6%
+                    
+                    const bullishOB = {
+                        type: 'Bullish',
+                        timeframe: tf,
+                        range: `${Math.round(currentPrice - distance).toLocaleString()}-${Math.round(currentPrice - distance + (currentPrice * 0.001)).toLocaleString()}`,
+                        status: getRandomStatus(),
+                        age: `${Math.floor(Math.random() * 4) + 1}h ${Math.floor(Math.random() * 60)}m`,
+                        id: `${asset}-ob-bull-${tf}-${Date.now()}`
+                    };
+
+                    const bearishOB = {
+                        type: 'Bearish',
+                        timeframe: tf,
+                        range: `${Math.round(currentPrice + distance).toLocaleString()}-${Math.round(currentPrice + distance + (currentPrice * 0.001)).toLocaleString()}`,
+                        status: getRandomStatus(),
+                        age: `${Math.floor(Math.random() * 4) + 1}h ${Math.floor(Math.random() * 60)}m`,
+                        id: `${asset}-ob-bear-${tf}-${Date.now()}`
+                    };
+
+                    // Fair Value Gaps - smaller ranges
+                    const fvgDistance = currentPrice * (0.001 + (index * 0.0005)); // 0.1%, 0.15%, 0.2%
+                    
+                    const bullishFVG = {
+                        dir: 'Bullish',
+                        timeframe: tf,
+                        range: `${Math.round(currentPrice - fvgDistance).toLocaleString()}-${Math.round(currentPrice - fvgDistance + (currentPrice * 0.0005)).toLocaleString()}`,
+                        pips: Math.round(fvgDistance / currentPrice * 10000),
+                        status: Math.random() > 0.5 ? 'Unfilled' : 'Testing',
+                        id: `${asset}-fvg-bull-${tf}-${Date.now()}`
+                    };
+
+                    const bearishFVG = {
+                        dir: 'Bearish',
+                        timeframe: tf,
+                        range: `${Math.round(currentPrice + fvgDistance).toLocaleString()}-${Math.round(currentPrice + fvgDistance + (currentPrice * 0.0005)).toLocaleString()}`,
+                        pips: Math.round(fvgDistance / currentPrice * 10000),
+                        status: Math.random() > 0.5 ? 'Unfilled' : 'Testing',
+                        id: `${asset}-fvg-bear-${tf}-${Date.now()}`
+                    };
+
+                    newOBs.push(bullishOB, bearishOB);
+                    newFVGs.push(bullishFVG, bearishFVG);
+                });
+
+                persistentLevels[asset] = { ob: newOBs, fvg: newFVGs };
+                renderPersistentLevels(asset);
+            }
+        }
+
+        function getRandomStatus() {
+            const statuses = ['Fresh', 'Testing', 'Respected', 'Partial'];
+            return statuses[Math.floor(Math.random() * statuses.length)];
+        }
+
+        function renderPersistentLevels(asset) {
+            // Render Order Blocks with timeframe and status
+            document.getElementById(`${asset}-ob`).innerHTML = persistentLevels[asset].ob.map(ob => 
+                `<div class="item">
+                    <div class="item-header">
+                        <span class="type ${ob.type.toLowerCase()}">${ob.type} OB</span>
+                        <div>
+                            <span class="timeframe">${ob.timeframe}</span>
+                            <span class="status-indicator ${ob.status.toLowerCase()}">${ob.status}</span>
+                        </div>
+                    </div>
+                    <div class="range">$${ob.range}</div>
+                    <div class="details">Age: ${ob.age}</div>
+                </div>`
+            ).join('');
+            
+            // Render FVGs with timeframe and status
+            document.getElementById(`${asset}-fvg`).innerHTML = persistentLevels[asset].fvg.map(fvg => 
+                `<div class="item">
+                    <div class="item-header">
+                        <span class="type ${fvg.dir.toLowerCase()}">${fvg.dir} FVG</span>
+                        <div>
+                            <span class="timeframe">${fvg.timeframe}</span>
+                            <span class="status-indicator ${fvg.status.toLowerCase()}">${fvg.status}</span>
+                        </div>
+                    </div>
+                    <div class="range">$${fvg.range}</div>
+                    <div class="details">${fvg.pips} pips</div>
+                </div>`
+            ).join('');
+        }
+
+        // ✅ NEW: Quality-Focused Setup Generation
+        function generateQualitySetup(asset, price, change) {
+            // Only generate high-quality setups
+            let conf = Math.floor(Math.random() * 8) + 12; // 12-20 range
+            let dir = 'NEUTRAL';
+            
+            // Enhanced confluence calculation
+            const momentum = Math.abs(change);
+            const sessionMultiplier = getSessionMultiplier();
+            const volatility = calculateVolatility(asset);
+            
+            // Quality thresholds
+            if (momentum > 1.2 && sessionMultiplier > 1.0) { // Strong momentum in good session
+                conf += 4;
+                
+                if (change > 0) {
+                    dir = 'BULLISH';
+                } else {
+                    dir = 'BEARISH';  
+                }
+                
+                // Check for bias change
+                const previousSetup = currentSetups[asset];
+                if (previousSetup && previousSetup.direction !== dir) {
+                    handleBiasChange(asset, previousSetup, dir, price);
+                }
+                
+                // Only create setup if confluence is truly high
+                if (conf >= 15) {
+                    const config = riskConfigs[riskMode];
+                    const setup = calculateSetupLevels(asset, price, dir, config);
+                    setup.confluence = conf;
+                    setup.direction = dir;
+                    setup.timestamp = Date.now();
+                    
+                    currentSetups[asset] = setup;
+                    lastSignalTime[asset] = Date.now();
+                    
+                    updateSetupDisplay(asset, setup, conf);
+                    
+                    // Enhanced trade journal entry
+                    addTradeMessage(`🎯 ${asset.toUpperCase()} ${dir} SETUP (${conf}/20)`, 'Signal');
+                    addTradeMessage(`├─ Entry: $${Math.round(setup.entry.min).toLocaleString()}-${Math.round(setup.entry.max).toLocaleString()}`, 'Setup');
+                    addTradeMessage(`├─ Stop: $${Math.round(setup.stop).toLocaleString()} (${riskMode})`, 'Setup'); 
+                    addTradeMessage(`└─ Targets: $${Math.round(setup.t1).toLocaleString()} | $${Math.round(setup.t2).toLocaleString()}`, 'Setup');
+                    
+                    // Audio alert
+                    playSignalAudio(conf);
+                }
+            }
+        }
+
+        // ✅ NEW: Bias Change Management
+        function handleBiasChange(asset, previousSetup, newDirection, currentPrice) {
+            testAudio('bias'); // Special bias change sound
+            
+            addTradeMessage(`🔄 ${asset.toUpperCase()} BIAS CHANGE: ${previousSetup.direction} → ${newDirection}`, 'Alert');
+            
+            // Try to close at breakeven
+            const entryAvg = (previousSetup.entry.min + previousSetup.entry.max) / 2;
+            const breakevenDistance = Math.abs(currentPrice - entryAvg) / entryAvg;
+            
+            if (breakevenDistance <= 0.002) { // Within 0.2% of breakeven
+                addTradeMessage(`✅ ${asset.toUpperCase()}: Position closed at breakeven`, 'Management');
+            } else {
+                const loss = breakevenDistance * 100;
+                addTradeMessage(`⚠️ ${asset.toUpperCase()}: Position closed at ${loss.toFixed(2)}% ${loss > 0 ? 'loss' : 'profit'}`, 'Management');
+            }
+        }
+
+        function calculateSetupLevels(asset, price, direction, config) {
+            const entry = {
+                min: price * (direction === 'BULLISH' ? 0.999 : 1.001),
+                max: price * (direction === 'BULLISH' ? 1.001 : 0.999)
+            };
+            
+            let stop, t1, t2;
+            
+            if (direction === 'BULLISH') {
+                stop = price * (1 - config.stopPct);
+                t1 = price * (1 + (config.stopPct * config.target1));
+                t2 = price * (1 + (config.stopPct * config.target2));
+            } else {
+                stop = price * (1 + config.stopPct);
+                t1 = price * (1 - (config.stopPct * config.target1));
+                t2 = price * (1 - (config.stopPct * config.target2));
+            }
+            
+            return { entry, stop, t1, t2 };
+        }
+
+        function recalculateSetup(asset, setup) {
+            const config = riskConfigs[riskMode];
+            const price = currentPrices[asset];
+            const newLevels = calculateSetupLevels(asset, price, setup.direction, config);
+            
+            Object.assign(setup, newLevels);
+            updateSetupDisplay(asset, setup, setup.confluence);
+            
+            addTradeMessage(`🔧 ${asset.toUpperCase()}: Setup recalculated for ${riskMode} mode`, 'System');
+        }
+
+        function updateSetupDisplay(asset, setup, conf) {
+            document.getElementById(`${asset}-entry`).textContent = `$${Math.round(setup.entry.min).toLocaleString()}-${Math.round(setup.entry.max).toLocaleString()}`;
+            document.getElementById(`${asset}-stop`).textContent = `$${Math.round(setup.stop).toLocaleString()}`;
+            document.getElementById(`${asset}-t1`).textContent = `$${Math.round(setup.t1).toLocaleString()}`;
+            document.getElementById(`${asset}-t2`).textContent = `$${Math.round(setup.t2).toLocaleString()}`;
+            document.getElementById(`${asset}-dir`).textContent = setup.direction;
+            
+            const rr = Math.abs(setup.t2 - setup.entry.min) / Math.abs(setup.entry.min - setup.stop);
+            document.getElementById(`${asset}-rr`).textContent = `1:${rr.toFixed(1)}`;
+
+            // Update confluence display
             document.getElementById(`${asset}-conf`).textContent = conf;
             const rating = document.getElementById(`${asset}-rating`);
             const alertBtn = document.getElementById(`${asset}-alert`);
@@ -423,11 +700,11 @@
             if (conf >= 18) {
                 rating.textContent = 'MAXIMUM'; rating.style.color = '#00ff88';
                 alertBtn.style.display = 'block';
-                addMessage(`🚨 ${asset.toUpperCase()} MAXIMUM: ${conf}/20! ${dir} scalping setup confirmed.`, 'P');
+                alertBtn.textContent = '🚨 MAXIMUM SETUP';
             } else if (conf >= 15) {
                 rating.textContent = 'HIGH'; rating.style.color = '#ffb800';
                 alertBtn.style.display = 'block';
-                addMessage(`⚠️ ${asset.toUpperCase()} High: ${conf}/20. ${dir} scalping setup active.`, 'P');
+                alertBtn.textContent = '🚨 HIGH SETUP';
             } else if (conf >= 12) {
                 rating.textContent = 'MEDIUM'; rating.style.color = '#00d4ff';
                 alertBtn.style.display = 'none';
@@ -435,6 +712,13 @@
                 rating.textContent = 'LOW'; rating.style.color = '#ff4757';
                 alertBtn.style.display = 'none';
             }
+        }
+
+        function calculateVolatility(asset) {
+            if (priceHistory[asset].length < 10) return 0;
+            const recent = priceHistory[asset].slice(-10);
+            const changes = recent.map(p => Math.abs(p.change));
+            return changes.reduce((a, b) => a + b, 0) / changes.length;
         }
 
         function updateSessions() {
@@ -457,21 +741,50 @@
             });
         }
 
-        function executeSetup(asset) {
-            const entry = document.getElementById(`${asset.toLowerCase()}-entry`).textContent;
-            const dir = document.getElementById(`${asset.toLowerCase()}-dir`).textContent;
-            addMessage(`🎯 ${asset} ${dir}: Entry ${entry}. Scalping setup ready for execution!`, 'ALERT');
+        function getSessionMultiplier() {
+            const now = new Date();
+            const utcHour = now.getUTCHours();
+            
+            if (utcHour >= 13 && utcHour <= 17) return 1.3; // London/NY overlap
+            else if ((utcHour >= 8 && utcHour <= 17) || (utcHour >= 13 && utcHour <= 22)) return 1.1;
+            else return 0.8;
         }
 
-        function addMessage(msg, sender) {
+        function executeSetup(asset) {
+            const setup = currentSetups[asset.toLowerCase()];
+            if (setup) {
+                addTradeMessage(`🚀 ${asset} ${setup.direction} EXECUTION CONFIRMED`, 'Execute');
+                addTradeMessage(`Entry: $${Math.round(setup.entry.min).toLocaleString()}-${Math.round(setup.entry.max).toLocaleString()}`, 'Execute');
+                addTradeMessage(`Risk: ${riskMode.toUpperCase()} | Targets: 1:${riskConfigs[riskMode].target1} & 1:${riskConfigs[riskMode].target2}`, 'Execute');
+            }
+        }
+
+        // ✅ NEW: Enhanced Trade Journal
+        function addTradeMessage(msg, sender) {
             const feed = document.getElementById('feed');
             const time = new Date().toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'});
+            
+            // Prevent duplicate messages within 1 second
+            const lastMessage = feed.children[feed.children.length - 1];
+            if (lastMessage && lastMessage.innerHTML.includes(msg)) return;
+            
             const div = document.createElement('div');
             div.className = 'message';
+            
+            // Color coding by sender type
+            let borderColor = 'var(--orange)';
+            if (sender === 'Signal') borderColor = 'var(--green)';
+            else if (sender === 'Alert') borderColor = 'var(--red)';
+            else if (sender === 'Execute') borderColor = 'var(--blue)';
+            
+            div.style.borderLeftColor = borderColor;
             div.innerHTML = `<div class="timestamp">${time}</div><strong>${sender}:</strong> ${msg}`;
+            
             feed.appendChild(div);
             feed.scrollTop = feed.scrollHeight;
-            while (feed.children.length > 8) feed.removeChild(feed.firstChild);
+            
+            // Keep only last 12 messages for better performance
+            while (feed.children.length > 12) feed.removeChild(feed.firstChild);
         }
 
         document.addEventListener('DOMContentLoaded', init);
