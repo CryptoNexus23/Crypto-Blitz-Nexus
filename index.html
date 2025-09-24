@@ -341,44 +341,67 @@
         }
 
         // ✅ NEW: Audio System
-        function testAudio(type) {
-            const sounds = {
-                low: 'audioLow',
-                high: 'audioHigh', 
-                max: 'audioMax',
-                bias: 'audioBias'
-            };
-            
-            const audio = document.getElementById(sounds[type]);
-            if (audio) {
-                audio.currentTime = 0;
-                audio.play().catch(e => {
-                    // Fallback: Use Web Audio API to generate beep
-                    generateBeep(type);
-                });
+      // Replace the entire testAudio function with this working version:
+function testAudio(type) {
+    try {
+        // Create Web Audio Context  
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        // Different frequencies and durations for each alert type
+        const audioSettings = {
+            low: { freq: 500, duration: 0.2 },
+            high: { freq: 700, duration: 0.3, repeat: 2 },
+            max: { freq: 900, duration: 0.4, repeat: 3 },
+            bias: { freq: 300, duration: 0.6 }
+        };
+        
+        const settings = audioSettings[type] || audioSettings.low;
+        
+        oscillator.frequency.setValueAtTime(settings.freq, audioContext.currentTime);
+        oscillator.type = 'sine';
+        
+        gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+        gainNode.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.01);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + settings.duration);
+        
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + settings.duration);
+        
+        // For multi-beep alerts (high/max)
+        if (settings.repeat > 1) {
+            for (let i = 1; i < settings.repeat; i++) {
+                setTimeout(() => {
+                    const osc2 = audioContext.createOscillator();
+                    const gain2 = audioContext.createGain();
+                    osc2.connect(gain2);
+                    gain2.connect(audioContext.destination);
+                    osc2.frequency.value = settings.freq;
+                    osc2.type = 'sine';
+                    gain2.gain.setValueAtTime(0.3, audioContext.currentTime);
+                    gain2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+                    osc2.start();
+                    osc2.stop(audioContext.currentTime + 0.2);
+                }, i * 300);
             }
-            
-            addTradeMessage(`🔊 Audio test: ${type.toUpperCase()} signal`, 'System');
         }
+        
+        addTradeMessage(`🔊 Audio test: ${type.toUpperCase()} signal (${settings.freq}Hz)`, 'System');
+        
+    } catch (error) {
+        addTradeMessage(`🔇 Audio not supported on this browser`, 'System');
+        console.log('Audio test failed:', error);
+    }
+}
 
-        function generateBeep(type) {
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-            
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            
-            const frequencies = { low: 400, high: 600, max: 800, bias: 300 };
-            oscillator.frequency.value = frequencies[type] || 500;
-            oscillator.type = 'sine';
-            
-            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
-            
-            oscillator.start(audioContext.currentTime);
-            oscillator.stop(audioContext.currentTime + 0.5);
-        }
+function generateBeep(type) {
+    testAudio(type); // Just use the main function
+}
+
 
         function playSignalAudio(confluenceLevel) {
             if (confluenceLevel >= 18) testAudio('max');
