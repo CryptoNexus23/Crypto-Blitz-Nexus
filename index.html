@@ -137,6 +137,7 @@
         .trade-stopped { border-color:var(--red); }
         .trade-target { border-color:var(--green); }
         .trade-invalid { border-color:var(--yellow); }
+        .trade-breakeven { border-color:var(--blue); }
 
         .confluence { background:linear-gradient(135deg,var(--orange),var(--blue)); 
                       border-radius:10px; padding:10px; text-align:center; margin-bottom:10px; }
@@ -181,7 +182,7 @@
     <div class="header">
         <div class="live"><div class="dot"></div>LIVE AI</div>
         <h1>Crypto Blitz Nexus Pro 3.0</h1>
-        <div class="subtitle">Self-Learning AI Scalping Terminal - Calibrated for Signals</div>
+        <div class="subtitle">Self-Learning AI Scalping Terminal - Breakeven Strategy Active</div>
     </div>
 
     <!-- Enhanced Control Panel with Audio Management -->
@@ -207,7 +208,7 @@
 
     <!-- NEW: Performance Dashboard -->
     <div class="performance-panel">
-        <h3 style="font-family:Orbitron;color:var(--green);text-align:center;margin-bottom:15px;">📊 AI PERFORMANCE ANALYTICS</h3>
+        <h3 style="font-family:Orbitron;color:var(--green);text-align:center;margin-bottom:15px;">📊 AI PERFORMANCE ANALYTICS - BREAKEVEN STRATEGY</h3>
         <div class="perf-grid">
             <div class="perf-stat">
                 <div class="perf-value" id="totalTrades">0</div>
@@ -230,8 +231,8 @@
                 <div class="perf-label">Avg Loss</div>
             </div>
             <div class="perf-stat">
-                <div class="perf-value" id="learningRate">READY</div>
-                <div class="perf-label">AI Status</div>
+                <div class="perf-value" id="breakevenRate">0%</div>
+                <div class="perf-label">Breakeven Rate</div>
             </div>
         </div>
     </div>
@@ -321,42 +322,40 @@
     </div>
 
     <div class="workspace">
-        <div class="ws-header">🤖 AI Trade Journal <span style="color:#00ff88" id="connectionStatus">🟢 READY</span></div>
+        <div class="ws-header">🤖 AI Trade Journal - Breakeven Strategy <span style="color:#00ff88" id="connectionStatus">🟢 READY</span></div>
         <div class="ws-feed" id="feed">
-            <div class="message"><div class="timestamp">00:00</div><strong>AI:</strong> Neural network calibrated - Realistic signal generation active.</div>
+            <div class="message"><div class="timestamp">00:00</div><strong>AI:</strong> Breakeven strategy initialized - Target 1 → Risk-free trades active.</div>
         </div>
     </div>
 
     <script>
-        // ===== CRYPTO NEXUS BLITZ PRO 3.0 - CALIBRATED FOR SIGNALS =====
-        // Self-Learning Trading System with Realistic Parameters
+        // ===== CRYPTO NEXUS BLITZ PRO 3.0 - BREAKEVEN STRATEGY =====
+        // Self-Learning Trading System with Breakeven Risk Management
         
         // Enhanced System Variables
         let priceHistory = {btc:[],eth:[]}, ws, coinbaseWS, reconnectAttempts = 0;
-        let currentPrices = {btc: 0, eth: 0}, scanInterval = 5000; // Faster scanning
+        let currentPrices = {btc: 0, eth: 0}, scanInterval = 5000;
         let persistentLevels = {btc: {ob: [], fvg: []}, eth: {ob: [], fvg: []}};
         let activeTrades = {btc: null, eth: null};
         let riskMode = 'conservative', newsMode = false;
         let audioAlertActive = false, alertInterval = null;
-        let lastSignalTime = {btc: 0, eth: 0}; // Prevent spam but allow realistic frequency
+        let lastSignalTime = {btc: 0, eth: 0};
         
-        // NEW: AI Learning System
+        // ✅ ENHANCED: AI Learning System with Breakeven Tracking
         const tradeDatabase = {
             trades: [],
             patterns: {},
             performance: {
-                totalTrades: 0, winners: 0, losers: 0, totalProfit: 0,
-                winRate: 0, profitFactor: 0, avgWin: 0, avgLoss: 0
+                totalTrades: 0, winners: 0, losers: 0, breakevenTrades: 0, totalProfit: 0,
+                winRate: 0, profitFactor: 0, avgWin: 0, avgLoss: 0, breakevenRate: 0
             }
         };
         
-        // ✅ FIXED: Realistic Risk Configurations
         const riskConfigs = {
-            conservative: { stopPct: 0.005, target1: 1.5, target2: 2.5, minConfidence: 10 }, // Was 16!
-            aggressive: { stopPct: 0.003, target1: 1.0, target2: 2.0, minConfidence: 8 }      // Was 14!
+            conservative: { stopPct: 0.005, target1: 1.5, target2: 2.5, minConfidence: 10 },
+            aggressive: { stopPct: 0.003, target1: 1.0, target2: 2.0, minConfidence: 8 }
         };
         
-        // Market Structure Detection
         let marketCondition = 'RANGING';
         let volatilityLevel = 'NORMAL';
         
@@ -374,17 +373,16 @@
             updateSessions();
             loadTradeDatabase();
             
-            // ✅ FASTER scanning - every 3 seconds instead of 30
             setInterval(() => adaptiveScan(), 3000);
             setInterval(updateSessions, 1000);
             setInterval(() => updatePersistentLevels(), 30000);
             setInterval(() => updatePerformanceDisplay(), 5000);
             
-            addTradeMessage('🤖 AI Neural Network Calibrated - Realistic signal generation active', 'AI');
-            addTradeMessage('📊 Scanning for 4-8 quality signals per day...', 'AI');
+            addTradeMessage('🤖 AI Breakeven Strategy Initialized - Target 1 → Risk-free trades', 'AI');
+            addTradeMessage('📊 Clean data collection for optimal AI learning...', 'AI');
         }
 
-        // ===== AI LEARNING SYSTEM =====
+        // ===== ENHANCED AI LEARNING SYSTEM =====
         function loadTradeDatabase() {
             const stored = localStorage.getItem('nexusTradeDB');
             if (stored) {
@@ -399,12 +397,15 @@
             localStorage.setItem('nexusTradeDB', JSON.stringify(tradeDatabase));
         }
 
+        // ✅ ENHANCED: Records WIN/LOSS/BREAKEVEN outcomes
         function recordTradeOutcome(asset, setup, outcome, profit) {
             const trade = {
                 asset, setup, outcome, profit,
                 timestamp: Date.now(),
                 marketCondition, volatilityLevel,
-                sessionActive: getCurrentActiveSession()
+                sessionActive: getCurrentActiveSession(),
+                reachedTarget1: setup.reachedTarget1 || false,
+                reachedTarget2: setup.reachedTarget2 || false
             };
             
             tradeDatabase.trades.push(trade);
@@ -413,39 +414,49 @@
             if (outcome === 'WIN') {
                 tradeDatabase.performance.winners++;
                 tradeDatabase.performance.totalProfit += Math.abs(profit);
-                tradeDatabase.performance.avgWin = tradeDatabase.performance.totalProfit / tradeDatabase.performance.winners;
+                const totalWinProfit = tradeDatabase.trades.filter(t => t.outcome === 'WIN').reduce((sum, t) => sum + Math.abs(t.profit), 0);
+                tradeDatabase.performance.avgWin = totalWinProfit / tradeDatabase.performance.winners;
             } else if (outcome === 'LOSS') {
                 tradeDatabase.performance.losers++;
                 tradeDatabase.performance.totalProfit -= Math.abs(profit);
                 const totalLoss = tradeDatabase.trades.filter(t => t.outcome === 'LOSS').reduce((sum, t) => sum + Math.abs(t.profit), 0);
                 tradeDatabase.performance.avgLoss = totalLoss / tradeDatabase.performance.losers;
+            } else if (outcome === 'BREAKEVEN') {
+                tradeDatabase.performance.breakevenTrades++;
+                // No profit/loss impact for breakeven trades
             }
             
-            tradeDatabase.performance.winRate = (tradeDatabase.performance.winners / tradeDatabase.performance.totalTrades) * 100;
+            // ✅ FIXED: Better win rate calculation
+            const profitableTrades = tradeDatabase.performance.winners + tradeDatabase.performance.breakevenTrades;
+            tradeDatabase.performance.winRate = (profitableTrades / tradeDatabase.performance.totalTrades) * 100;
+            tradeDatabase.performance.breakevenRate = (tradeDatabase.performance.breakevenTrades / tradeDatabase.performance.totalTrades) * 100;
             tradeDatabase.performance.profitFactor = tradeDatabase.performance.avgWin / Math.max(tradeDatabase.performance.avgLoss, 1);
             
             updatePatternWeights(setup, outcome);
             saveTradeDatabase();
             updatePerformanceDisplay();
             
-            addTradeMessage(`🧠 AI Learning: ${outcome} recorded. Pattern weights updated.`, 'AI');
+            addTradeMessage(`🧠 AI Learning: ${outcome} recorded. Pattern database updated.`, 'AI');
         }
 
         function updatePatternWeights(setup, outcome) {
             const patternKey = `${setup.direction}_${setup.confidence}_${marketCondition}_${volatilityLevel}`;
             
             if (!tradeDatabase.patterns[patternKey]) {
-                tradeDatabase.patterns[patternKey] = { wins: 0, losses: 0, weight: 1.0 };
+                tradeDatabase.patterns[patternKey] = { wins: 0, losses: 0, breakevenTrades: 0, weight: 1.0 };
             }
             
             const pattern = tradeDatabase.patterns[patternKey];
             
             if (outcome === 'WIN') {
                 pattern.wins++;
-                pattern.weight = Math.min(pattern.weight + 0.1, 2.0);
+                pattern.weight = Math.min(pattern.weight + 0.15, 2.0); // Bigger boost for full wins
+            } else if (outcome === 'BREAKEVEN') {
+                pattern.breakevenTrades++;
+                pattern.weight = Math.min(pattern.weight + 0.05, 1.5); // Small boost for reaching T1
             } else if (outcome === 'LOSS') {
                 pattern.losses++;
-                pattern.weight = Math.max(pattern.weight - 0.15, 0.3);
+                pattern.weight = Math.max(pattern.weight - 0.2, 0.2); // Bigger penalty for losses
             }
         }
 
@@ -453,12 +464,14 @@
             const patternKey = `${setup.direction}_${setup.confidence}_${marketCondition}_${volatilityLevel}`;
             const pattern = tradeDatabase.patterns[patternKey];
             
-            if (!pattern || (pattern.wins + pattern.losses) < 3) return 50;
+            if (!pattern || (pattern.wins + pattern.losses + pattern.breakevenTrades) < 3) return 50;
             
-            return Math.round((pattern.wins / (pattern.wins + pattern.losses)) * 100);
+            const totalTrades = pattern.wins + pattern.losses + pattern.breakevenTrades;
+            const successfulTrades = pattern.wins + pattern.breakevenTrades; // Both are considered successful
+            return Math.round((successfulTrades / totalTrades) * 100);
         }
 
-        // ===== ENHANCED CONTROL FUNCTIONS =====
+        // ===== CONTROL FUNCTIONS =====
         function toggleRiskMode() {
             const btn = document.getElementById('riskMode');
             riskMode = riskMode === 'conservative' ? 'aggressive' : 'conservative';
@@ -485,14 +498,14 @@
                 document.getElementById('riskMode').textContent = 'AGGRESSIVE';
                 document.getElementById('riskMode').className = 'toggle-btn';
                 addTradeMessage('🚨 HIGH IMPACT NEWS: Risk tightened, scanning accelerated', 'ALERT');
-                scanInterval = 1000; // Every second during news
+                scanInterval = 1000;
             } else {
                 addTradeMessage('📰 Normal market conditions resumed', 'System');
-                scanInterval = 3000; // Back to 3 seconds
+                scanInterval = 3000;
             }
         }
 
-        // ===== ENHANCED AUDIO SYSTEM =====
+        // ===== AUDIO SYSTEM =====
         function testAudio(type) {
             try {
                 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -583,7 +596,7 @@
             addTradeMessage('🔕 Audio alerts acknowledged', 'System');
         }
 
-        // ===== ADAPTIVE MARKET SCANNING =====
+        // ===== MARKET SCANNING =====
         function adaptiveScan() {
             detectMarketCondition();
             detectVolatility();
@@ -633,9 +646,8 @@
                 scanInterval < 4000 ? 'ACTIVE' : 'NORMAL';
         }
 
-        // ===== ENHANCED SIGNAL DETECTION =====
+        // ===== SIGNAL DETECTION =====
         function scanForSignals(asset, currentPrice) {
-            // ✅ Allow more frequent signals - every 2 minutes minimum instead of 5
             const timeSinceLastSignal = Date.now() - lastSignalTime[asset];
             if (timeSinceLastSignal < 120000) return; // 2 minutes minimum
             
@@ -643,21 +655,18 @@
             const sessionMultiplier = getSessionMultiplier();
             const patternScore = calculatePatternScore(asset, currentPrice);
             
-            // ✅ FIXED: More realistic base confluence - 10-16 instead of 8-12
             let baseConfluence = 10 + Math.floor(Math.random() * 6); // 10-16 base
             
-            baseConfluence += Math.floor(momentum * 1.5); // Reduced multiplier for realism
+            baseConfluence += Math.floor(momentum * 1.5);
             baseConfluence += Math.floor(sessionMultiplier * 1.5);
             baseConfluence += Math.floor(patternScore * 2);
             
-            // Market condition adjustments - more realistic
             if (marketCondition === 'TRENDING_UP' && momentum > 0) baseConfluence += 1;
             if (marketCondition === 'TRENDING_DOWN' && momentum < 0) baseConfluence += 1;
             if (volatilityLevel === 'HIGH' || volatilityLevel === 'EXTREME') baseConfluence += 2;
             
             const minRequired = riskConfigs[riskMode].minConfidence;
             
-            // ✅ MUCH LOWER threshold - should generate signals now!
             if (baseConfluence >= minRequired && !activeTrades[asset]) {
                 generateAISetup(asset, currentPrice, baseConfluence, momentum);
                 lastSignalTime[asset] = Date.now();
@@ -665,7 +674,7 @@
         }
 
         function calculateMomentum(asset) {
-            if (priceHistory[asset].length < 5) return Math.random() > 0.5 ? 0.5 : -0.5; // Default momentum
+            if (priceHistory[asset].length < 5) return Math.random() > 0.5 ? 0.5 : -0.5;
             
             const recent = priceHistory[asset].slice(-5);
             const avgChange = recent.reduce((sum, p) => sum + p.change, 0) / recent.length;
@@ -696,14 +705,18 @@
             setup.probability = getPatternProbability({direction, confluence: confidence, marketCondition, volatilityLevel});
             setup.entryPrice = price;
             setup.status = 'ACTIVE';
+            setup.reachedTarget1 = false;
+            setup.reachedTarget2 = false;
             
             activeTrades[asset] = setup;
             updateSetupDisplay(asset, setup);
             
-            addTradeMessage(`🤖 AI SIGNAL: ${asset.toUpperCase()} ${direction} (${confidence}/20)`, 'AI');
+            // ✅ ENHANCED: Show LONG/SHORT direction clearly
+            const directionIcon = direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️';
+            addTradeMessage(`🤖 AI SIGNAL: ${directionIcon} ${asset.toUpperCase()} ${direction} (${confidence}/20)`, 'AI');
             addTradeMessage(`├─ Entry: $${Math.round(setup.entry.min).toLocaleString()}-${Math.round(setup.entry.max).toLocaleString()}`, 'AI');
             addTradeMessage(`├─ Stop: $${Math.round(setup.stop).toLocaleString()} | Targets: $${Math.round(setup.t1).toLocaleString()}/$${Math.round(setup.t2).toLocaleString()}`, 'AI');
-            addTradeMessage(`└─ Historical win rate: ${setup.probability}% | Market: ${marketCondition}`, 'AI');
+            addTradeMessage(`└─ Historical success rate: ${setup.probability}% | Market: ${marketCondition}`, 'AI');
             
             playSignalAudio(confidence);
             
@@ -714,7 +727,7 @@
             }
         }
 
-        // ===== TRADE MANAGEMENT SYSTEM =====
+        // ===== BREAKEVEN TRADE MANAGEMENT SYSTEM =====
         function updateTradeStatus(asset) {
             const trade = activeTrades[asset];
             if (!trade) return;
@@ -722,18 +735,39 @@
             const currentPrice = currentPrices[asset];
             const entryAvg = (trade.entry.min + trade.entry.max) / 2;
             
-            // Check for stop loss hit
-            if ((trade.direction === 'BULLISH' && currentPrice <= trade.stop) ||
-                (trade.direction === 'BEARISH' && currentPrice >= trade.stop)) {
+            // ✅ NEW: Check for Target 1 hit FIRST (move to breakeven)
+            if (!trade.reachedTarget1 && 
+                ((trade.direction === 'BULLISH' && currentPrice >= trade.t1) ||
+                 (trade.direction === 'BEARISH' && currentPrice <= trade.t1))) {
                 
-                const loss = Math.abs(currentPrice - entryAvg);
-                trade.status = 'STOPPED';
-                trade.outcome = 'LOSS';
-                trade.profit = -loss;
+                // Target 1 reached - Move stop to breakeven!
+                trade.reachedTarget1 = true;
+                trade.originalStop = trade.stop; // Save original stop
+                trade.stop = entryAvg; // Move stop to entry (breakeven)
                 
-                updateTradeStatusDisplay(asset, 'STOP LOSS HIT', 'trade-stopped');
-                recordTradeOutcome(asset, trade, 'LOSS', loss);
-                addTradeMessage(`❌ ${asset.toUpperCase()} STOP LOSS: -$${Math.round(loss)}`, 'Trade');
+                updateTradeStatusDisplay(asset, '🎯 TARGET 1 HIT - RISK-FREE TRADE 🛡️', 'trade-breakeven');
+                addTradeMessage(`🎯 ${asset.toUpperCase()} TARGET 1 HIT - Stop moved to breakeven!`, 'Trade');
+                addTradeMessage(`🛡️ Risk eliminated - Running ${trade.direction} to Target 2...`, 'Trade');
+                
+                // Update display to show new breakeven stop
+                document.getElementById(`${asset}-stop`).textContent = `$${Math.round(trade.stop).toLocaleString()}`;
+                document.getElementById(`${asset}-stop`).style.color = 'var(--blue)'; // Blue for breakeven
+            }
+            
+            // Check for Target 2 hit (full win)
+            else if (trade.reachedTarget1 && 
+                     ((trade.direction === 'BULLISH' && currentPrice >= trade.t2) ||
+                      (trade.direction === 'BEARISH' && currentPrice <= trade.t2))) {
+                
+                const profit = Math.abs(trade.t2 - entryAvg);
+                trade.status = 'TARGET2_HIT';
+                trade.outcome = 'WIN';
+                trade.profit = profit;
+                trade.reachedTarget2 = true;
+                
+                updateTradeStatusDisplay(asset, '🚀 TARGET 2 HIT - FULL WIN! ✅', 'trade-target');
+                recordTradeOutcome(asset, trade, 'WIN', profit);
+                addTradeMessage(`🚀 ${asset.toUpperCase()} TARGET 2 HIT: +$${Math.round(profit)} - FULL WIN!`, 'Trade');
                 
                 setTimeout(() => { 
                     activeTrades[asset] = null;
@@ -742,18 +776,39 @@
                 }, 5000);
             }
             
-            // Check for target hits
-            else if ((trade.direction === 'BULLISH' && currentPrice >= trade.t1) ||
-                     (trade.direction === 'BEARISH' && currentPrice <= trade.t1)) {
+            // Check for breakeven stop hit (after Target 1)
+            else if (trade.reachedTarget1 && !trade.reachedTarget2 &&
+                     ((trade.direction === 'BULLISH' && currentPrice <= trade.stop) ||
+                      (trade.direction === 'BEARISH' && currentPrice >= trade.stop))) {
                 
-                const profit = Math.abs(currentPrice - entryAvg);
-                trade.status = 'TARGET_HIT';
-                trade.outcome = 'WIN';
-                trade.profit = profit;
+                trade.status = 'BREAKEVEN';
+                trade.outcome = 'BREAKEVEN';
+                trade.profit = 0; // Breakeven = no profit, no loss
                 
-                updateTradeStatusDisplay(asset, 'TARGET 1 HIT ✅', 'trade-target');
-                recordTradeOutcome(asset, trade, 'WIN', profit);
-                addTradeMessage(`✅ ${asset.toUpperCase()} TARGET 1: +$${Math.round(profit)}`, 'Trade');
+                updateTradeStatusDisplay(asset, '🔄 BREAKEVEN STOP HIT - CAPITAL PROTECTED 🛡️', 'trade-breakeven');
+                recordTradeOutcome(asset, trade, 'BREAKEVEN', 0);
+                addTradeMessage(`🔄 ${asset.toUpperCase()} BREAKEVEN: $0 - Capital protected after T1 hit`, 'Trade');
+                
+                setTimeout(() => { 
+                    activeTrades[asset] = null;
+                    updateTradeStatusDisplay(asset, 'Scanning for optimal entry...', '');
+                    document.getElementById(`${asset}-alert`).style.display = 'none';
+                }, 5000);
+            }
+            
+            // Check for original stop loss hit (before Target 1)
+            else if (!trade.reachedTarget1 && 
+                     ((trade.direction === 'BULLISH' && currentPrice <= trade.originalStop || currentPrice <= trade.stop) ||
+                      (trade.direction === 'BEARISH' && currentPrice >= trade.originalStop || currentPrice >= trade.stop))) {
+                
+                const loss = Math.abs(currentPrice - entryAvg);
+                trade.status = 'STOPPED';
+                trade.outcome = 'LOSS';
+                trade.profit = -loss;
+                
+                updateTradeStatusDisplay(asset, '❌ STOP LOSS HIT - FULL LOSS', 'trade-stopped');
+                recordTradeOutcome(asset, trade, 'LOSS', loss);
+                addTradeMessage(`❌ ${asset.toUpperCase()} STOP LOSS: -$${Math.round(loss)} (before T1)`, 'Trade');
                 
                 setTimeout(() => { 
                     activeTrades[asset] = null;
@@ -763,7 +818,7 @@
             }
             
             // Update P&L in real-time
-            if (trade.status === 'ACTIVE') {
+            else if (trade.status === 'ACTIVE') {
                 const unrealizedPnL = trade.direction === 'BULLISH' ? 
                     currentPrice - entryAvg : entryAvg - currentPrice;
                 
@@ -783,8 +838,9 @@
         function executeSetup(asset) {
             const trade = activeTrades[asset.toLowerCase()];
             if (trade) {
-                updateTradeStatusDisplay(asset.toLowerCase(), 'TRADE EXECUTED ⚡', 'trade-active');
-                addTradeMessage(`🚀 ${asset} TRADE EXECUTED - Monitoring for targets/stops`, 'Execute');
+                const directionIcon = trade.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️';
+                updateTradeStatusDisplay(asset.toLowerCase(), `${directionIcon} TRADE EXECUTED - MONITORING`, 'trade-active');
+                addTradeMessage(`🚀 ${directionIcon} ${asset} ${trade.direction} EXECUTED - Breakeven strategy active`, 'Execute');
                 acknowledgeAlert();
             }
         }
@@ -887,7 +943,7 @@
 
             timeframes.forEach((tf, index) => {
                 const distance = currentPrice * (0.001 + (index * 0.002));
-                const confidence = 0.6 + (Math.random() * 0.3); // 60-90% confidence
+                const confidence = 0.6 + (Math.random() * 0.3);
                 
                 if (confidence > 0.5) {
                     const bullishOB = {
@@ -1023,21 +1079,21 @@
             if (setup.confidence >= 18) {
                 rating.textContent = 'MAXIMUM'; rating.style.color = '#00ff88';
                 alertBtn.style.display = 'block';
-                alertBtn.textContent = '🚨 AI MAXIMUM SETUP';
+                alertBtn.textContent = `🚨 ${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} ${setup.direction} MAX`;
             } else if (setup.confidence >= 15) {
                 rating.textContent = 'HIGH'; rating.style.color = '#ffb800';
                 alertBtn.style.display = 'block';
-                alertBtn.textContent = '🚨 AI HIGH SETUP';
+                alertBtn.textContent = `🚨 ${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} ${setup.direction} HIGH`;
             } else if (setup.confidence >= 12) {
                 rating.textContent = 'MEDIUM'; rating.style.color = '#00d4ff';
-                alertBtn.style.display = 'block'; // ✅ Show medium setups too
-                alertBtn.textContent = '🚨 AI MEDIUM SETUP';
+                alertBtn.style.display = 'block';
+                alertBtn.textContent = `🚨 ${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} ${setup.direction} MED`;
             } else {
                 rating.textContent = 'LOW'; rating.style.color = '#ff4757';
                 alertBtn.style.display = 'none';
             }
             
-            updateTradeStatusDisplay(asset, 'TRADE READY - CLICK TO EXECUTE', 'trade-active');
+            updateTradeStatusDisplay(asset, `${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} TRADE READY - CLICK TO EXECUTE`, 'trade-active');
         }
 
         // ===== PERFORMANCE & ANALYTICS =====
@@ -1049,12 +1105,12 @@
             document.getElementById('profitFactor').textContent = perf.profitFactor.toFixed(2);
             document.getElementById('avgWin').textContent = '$' + Math.round(perf.avgWin);
             document.getElementById('avgLoss').textContent = '$' + Math.round(perf.avgLoss);
+            document.getElementById('breakevenRate').textContent = perf.breakevenRate.toFixed(1) + '%';
             
             const learningStatus = tradeDatabase.trades.length < 10 ? 'LEARNING' :
                                   perf.winRate > 60 ? 'OPTIMIZED' :
                                   perf.winRate > 45 ? 'ADAPTING' : 'CALIBRATING';
             
-            document.getElementById('learningRate').textContent = learningStatus;
             document.getElementById('connectionStatus').textContent = `🟢 ${learningStatus}`;
         }
 
@@ -1121,7 +1177,7 @@
             while (feed.children.length > 15) feed.removeChild(feed.firstChild);
         }
 
-        // Initialize the calibrated AI system
+        // Initialize the breakeven strategy system
         document.addEventListener('DOMContentLoaded', init);
     </script>
 </body>
