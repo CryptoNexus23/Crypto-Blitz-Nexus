@@ -1,6 +1,140 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Crypto Blitz Nexus Pro 3.0 – Live Trading Edition</title>
+  <style>
+    /* (All of your existing CSS goes here, unchanged) */
+  </style>
+  <!-- Binance API client from CDN -->
+  <script src="https://unpkg.com/binance-api-node/dist/index.umd.js"></script>
+</head>
+<body>
+  <!-- (Your existing header, controls, panels, trade journal, etc. go here unchanged) -->
+
+  <!-- Prompt for Binance API credentials on first load -->
+  <script>
+    (function initApiKeys() {
+      if (!localStorage.getItem('BINANCE_API_KEY') || !localStorage.getItem('BINANCE_API_SECRET')) {
+        const key = prompt('Enter your Binance API Key:');
+        const secret = prompt('Enter your Binance API Secret:');
+        if (!key || !secret) {
+          alert('API keys are required for live trading.');
+          throw new Error('Missing Binance API keys');
+        }
+        localStorage.setItem('BINANCE_API_KEY', key.trim());
+        localStorage.setItem('BINANCE_API_SECRET', secret.trim());
+      }
+    })();
+  </script>
+
+  <!-- Live-Trading Integration -->
+  <script>
+    // Load stored keys
+    const API_KEY = localStorage.getItem('BINANCE_API_KEY');
+    const API_SECRET = localStorage.getItem('BINANCE_API_SECRET');
+
+    // Initialize Binance client
+    const client = BinanceApiNode.default({
+      apiKey: API_KEY,
+      apiSecret: API_SECRET,
+    });
+    client.ws.keepAlive = true;
+
+    // Utility: determine order quantity
+    function calculateQty(symbol) {
+      return symbol === 'BTCUSDT' ? 0.001 : 0.02;
+    }
+
+    // Place market order + OCO (TP/SL)
+    async function placeOcoOrder(symbol, side, entryPrice, tpPct, slPct) {
+      const qty = calculateQty(symbol);
+      // 1) Market entry
+      await client.order({ symbol, side, type: 'MARKET', quantity: qty });
+      // 2) Compute prices
+      const tp = (entryPrice * (1 + tpPct/100)).toFixed(2);
+      const stop = (entryPrice * (1 - slPct/100)).toFixed(2);
+      const stopLimit = (stop * 0.995).toFixed(2);
+      // 3) OCO bracket
+      await client.orderOco({
+        symbol,
+        side: side === 'BUY' ? 'SELL' : 'BUY',
+        quantity: qty,
+        price: tp,
+        stopPrice: stop,
+        stopLimitPrice: stopLimit,
+        stopLimitTimeInForce: 'GTC',
+      });
+      addTradeMessage(`🚀 OCO placed: ${symbol} QTY ${qty}`, 'System');
+    }
+
+    // Breakeven adjustment on Target1 fill
+    client.ws.user(async msg => {
+      if (msg.eventType === 'ORDER_TRADE_UPDATE' &&
+          msg.order.status === 'FILLED' &&
+          msg.order.side === 'SELL' &&
+          msg.order.clientOrderId.includes('OCO')) {
+        const sym = msg.order.symbol;
+        const entry = parseFloat(msg.order.price);
+        // Cancel SL leg
+        await client.cancelOrder({ symbol: sym, orderId: msg.order.orderId });
+        // Place breakeven STOP_MARKET
+        await client.order({
+          symbol: sym,
+          side: 'SELL',
+          type: 'STOP_MARKET',
+          stopPrice: entry.toFixed(2),
+          closePosition: true,
+        });
+        addTradeMessage(`🔄 Breakeven SL set @ ${entry.toFixed(2)}`, 'System');
+      }
+    });
+
+    // Override executeSetup to trigger live orders
+    async function executeSetup(asset) {
+      const symbol = asset === 'BTC' ? 'BTCUSDT' : 'ETHUSDT';
+      const entry = parseFloat(document.getElementById(
+        asset.toLowerCase()+'-entry'
+      ).textContent);
+      const cfg = riskConfigs[riskMode];
+      await placeOcoOrder(symbol, 'BUY', entry, cfg.target2, cfg.stopPct*100);
+      addTradeMessage(`🚀 Live order placed: ${symbol} @ ${entry}`, 'AI');
+    }
+
+    // Replace your price feed with Binance candles
+    function connectBinanceStreams() {
+      client.ws.candles(['BTCUSDT','ETHUSDT'],'1m',c => {
+        const p = parseFloat(c.close);
+        if (c.symbol==='BTCUSDT') {
+          currentPrices.btc = p;
+          document.getElementById('btc-price').textContent = p.toFixed(2);
+          processNewCandle({asset:'btc',price:p,time:Date.now()});
+        } else {
+          currentPrices.eth = p;
+          document.getElementById('eth-price').textContent = p.toFixed(2);
+          processNewCandle({asset:'eth',price:p,time:Date.now()});
+        }
+      });
+    }
+
+    // Enhance init to wire live trading
+    const origInit = window.init;
+    window.init = function() {
+      origInit();
+      connectBinanceStreams();
+      addTradeMessage('🔗 Binance live trading enabled', 'System');
+    };
+
+    // Start
+    window.onload = init;
+  </script>
+
+  <!-- Load your existing AI engine and helpers -->
+  <script>
+ <!DOCTYPE html>
+<html lang="en">
+<head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Crypto Blitz Nexus Pro 3.0 - AI-Enhanced Scalping</title>
@@ -1283,5 +1417,8 @@
             if (coinbaseWS) coinbaseWS.close();
         });
     </script>
+</body>
+</html>
+  </script>
 </body>
 </html>
