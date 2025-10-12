@@ -1,6 +1,7 @@
-<!DOCTYPE html>
+Blitz nexus Binance version    <!DOCTYPE html>
 <html lang="en">
-<head>
+<head>      <script src=“https://cdn.jsdelivr.net/npm/binance-api-node@1.8.1/dist/index.umd.min.js"></script>
+
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Crypto Blitz Nexus Pro 3.0 - AI-Enhanced Scalping</title>
@@ -185,7 +186,17 @@
         }
     </style>
 </head>
-<body>
+<body> <script>
+(function(){
+  if(!localStorage.getItem('BINANCE_API_KEY')){
+    const key=prompt('Enter Binance API Key');
+    const secret=prompt('Enter Binance API Secret');
+    localStorage.setItem('BINANCE_API_KEY',key.trim());
+    localStorage.setItem('BINANCE_API_SECRET',secret.trim());
+  }
+})();
+</script>
+
     <div class="header">
         <div class="live"><div class="dot"></div>LIVE AI</div>
         <h1>Crypto Blitz Nexus Pro 3.0</h1>
@@ -1282,6 +1293,107 @@
             if (ws) ws.close();
             if (coinbaseWS) coinbaseWS.close();
         });
-    </script>
+    </script> <!-- Live-Trading Integration -->
+<script>
+  // 1. Load API keys from localStorage
+  const API_KEY = localStorage.getItem('BINANCE_API_KEY');
+  const API_SECRET = localStorage.getItem('BINANCE_API_SECRET');
+
+  // 2. Initialize Binance client
+  const client = window.Binance({
+    apiKey: API_KEY,
+    apiSecret: API_SECRET,
+  });
+  client.ws.keepAlive = true;
+
+  // 3. Helper to calculate order quantity
+  function calculateQty(symbol) {
+    return symbol === 'BTCUSDT' ? 0.001 : 0.02;
+  }
+
+  // 4. Place market order + OCO TP/SL bracket
+  async function placeOcoOrder(symbol, side, entryPrice, tpPct, slPct) {
+    const qty = calculateQty(symbol);
+    // Market entry
+    await client.order({ symbol, side, type: 'MARKET', quantity: qty });
+    // Compute TP and SL prices
+    const tp = (entryPrice * (1 + tpPct / 100)).toFixed(2);
+    const stop = (entryPrice * (1 - slPct / 100)).toFixed(2);
+    const stopLimit = (stop * 0.995).toFixed(2);
+    // OCO bracket
+    await client.orderOco({
+      symbol,
+      side: side === 'BUY' ? 'SELL' : 'BUY',
+      quantity: qty,
+      price: tp,
+      stopPrice: stop,
+      stopLimitPrice: stopLimit,
+      stopLimitTimeInForce: 'GTC',
+    });
+    addTradeMessage(`🚀 OCO placed: ${symbol} qty ${qty}`, 'System');
+  }
+
+  // 5. Breakeven adjustment on Target1 fill
+  client.ws.user(async msg => {
+    if (
+      msg.eventType === 'ORDER_TRADE_UPDATE' &&
+      msg.order.status === 'FILLED' &&
+      msg.order.clientOrderId.includes('OCO')
+    ) {
+      const sym = msg.order.symbol;
+      const entry = parseFloat(msg.order.price);
+      // Cancel original SL leg
+      await client.cancelOrder({ symbol: sym, orderId: msg.order.orderId });
+      // Place breakeven stop-market
+      await client.order({
+        symbol: sym,
+        side: 'SELL',
+        type: 'STOP_MARKET',
+        stopPrice: entry.toFixed(2),
+        closePosition: true,
+      });
+      addTradeMessage(`🔄 Breakeven SL set @ ${entry.toFixed(2)}`, 'System');
+    }
+  });
+
+  // 6. Override executeSetup to use live trading
+  async function executeSetup(asset) {
+    const symbol = asset === 'BTC' ? 'BTCUSDT' : 'ETHUSDT';
+    const entry = parseFloat(
+      document.getElementById(asset.toLowerCase() + '-entry').textContent
+    );
+    const cfg = riskConfigs[riskMode];
+    await placeOcoOrder(symbol, 'BUY', entry, cfg.target2, cfg.stopPct * 100);
+    addTradeMessage(`🚀 Live order placed: ${symbol} @ ${entry}`, 'AI');
+  }
+
+  // 7. Replace price feed with Binance candles
+  function connectBinanceStreams() {
+    client.ws.candles(['BTCUSDT', 'ETHUSDT'], '1m', candle => {
+      const p = parseFloat(candle.close);
+      if (candle.symbol === 'BTCUSDT') {
+        currentPrices.btc = p;
+        document.getElementById('btc-price').textContent = p.toFixed(2);
+        processNewCandle({ asset: 'btc', price: p, time: Date.now() });
+      } else {
+        currentPrices.eth = p;
+        document.getElementById('eth-price').textContent = p.toFixed(2);
+        processNewCandle({ asset: 'eth', price: p, time: Date.now() });
+      }
+    });
+  }
+
+  // 8. Hook into your existing init function
+  const originalInit = window.init;
+  window.init = function () {
+    originalInit();
+    connectBinanceStreams();
+    addTradeMessage('🔗 Binance live trading enabled', 'System');
+  };
+
+  // 9. Ensure init runs on page load
+  window.onload = init;
+</script>
+
 </body>
 </html>
