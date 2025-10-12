@@ -395,7 +395,7 @@
             useTestnet: true
         };
 
-        // ===== BINANCE API CLASS =====
+        // ===== BINANCE API CLASS - CORS FIXED =====
         class BinanceAPI {
             constructor(apiKey, apiSecret, testnet = true) {
                 this.apiKey = apiKey;
@@ -425,11 +425,11 @@
                 const url = `${this.baseURL}${endpoint}?${queryString}`;
                 
                 try {
+                    // ✅ CORS FIX: Removed Content-Type header
                     const response = await fetch(url, {
                         method: method,
                         headers: {
-                            'X-MBX-APIKEY': this.apiKey,
-                            'Content-Type': 'application/json'
+                            'X-MBX-APIKEY': this.apiKey
                         }
                     });
                     
