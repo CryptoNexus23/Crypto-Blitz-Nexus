@@ -1,6 +1,8 @@
 Blitz nexus Binance version    <!DOCTYPE html>
 <html lang="en">
 <head>      <script src=“https://cdn.jsdelivr.net/npm/binance-api-node@1.8.1/dist/index.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/binance-api-node@1.8.1/dist/index.umd.min.js"></script>
+
 
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1392,6 +1394,92 @@ Blitz nexus Binance version    <!DOCTYPE html>
   };
 
   // 9. Ensure init runs on page load
+  window.onload = init;
+</script>
+<!-- Live-Trading Integration -->
+<script>
+  // Load your saved API keys
+  const API_KEY = localStorage.getItem('BINANCE_API_KEY');
+  const API_SECRET = localStorage.getItem('BINANCE_API_SECRET');
+  // Initialize Binance client (testnet or mainnet)
+  const client = window.Binance({
+    apiKey: API_KEY,
+    apiSecret: API_SECRET,
+    // Uncomment for testnet:
+    // httpBase: 'https://testnet.binance.vision',
+    // wsBase:   'wss://testnet.binance.vision',
+  });
+  client.ws.keepAlive = true;
+
+  function calculateQty(symbol) {
+    return symbol === 'BTCUSDT' ? 0.001 : 0.02;
+  }
+
+  async function placeOcoOrder(symbol, side, entry, tpPct, slPct) {
+    const qty = calculateQty(symbol);
+    await client.order({ symbol, side, type: 'MARKET', quantity: qty });
+    const tp = (entry*(1+tpPct/100)).toFixed(2);
+    const stop = (entry*(1-slPct/100)).toFixed(2);
+    const stopLimit = (stop*0.995).toFixed(2);
+    await client.orderOco({
+      symbol,
+      side: side==='BUY'?'SELL':'BUY',
+      quantity: qty,
+      price: tp,
+      stopPrice: stop,
+      stopLimitPrice: stopLimit,
+      stopLimitTimeInForce: 'GTC'
+    });
+    addTradeMessage(`🚀 OCO placed: ${symbol} qty ${qty}`, 'System');
+  }
+
+  client.ws.user(async msg => {
+    if (msg.eventType==='ORDER_TRADE_UPDATE' &&
+        msg.order.status==='FILLED' &&
+        msg.order.clientOrderId.includes('OCO')) {
+      const sym = msg.order.symbol;
+      const entry = parseFloat(msg.order.price);
+      await client.cancelOrder({ symbol: sym, orderId: msg.order.orderId });
+      await client.order({
+        symbol: sym,
+        side: 'SELL',
+        type: 'STOP_MARKET',
+        stopPrice: entry.toFixed(2),
+        closePosition: true
+      });
+      addTradeMessage(`🔄 Breakeven SL @ ${entry.toFixed(2)}`, 'System');
+    }
+  });
+
+  async function executeSetup(asset) {
+    const sym = asset==='BTC'?'BTCUSDT':'ETHUSDT';
+    const entry = parseFloat(document.getElementById(asset.toLowerCase()+'-entry').textContent);
+    const cfg = riskConfigs[riskMode];
+    await placeOcoOrder(sym, 'BUY', entry, cfg.target2, cfg.stopPct*100);
+    addTradeMessage(`🚀 Live order: ${sym} @ ${entry}`, 'AI');
+  }
+
+  function connectBinanceStreams() {
+    client.ws.candles(['BTCUSDT','ETHUSDT'],'1m',candle=>{
+      const p = parseFloat(candle.close);
+      if (candle.symbol==='BTCUSDT') {
+        currentPrices.btc = p;
+        document.getElementById('btc-price').textContent = p.toFixed(2);
+        processNewCandle({ asset:'btc', price:p, time:Date.now() });
+      } else {
+        currentPrices.eth = p;
+        document.getElementById('eth-price').textContent = p.toFixed(2);
+        processNewCandle({ asset:'eth', price:p, time:Date.now() });
+      }
+    });
+  }
+
+  const origInit = window.init;
+  window.init = function() {
+    origInit();
+    connectBinanceStreams();
+    addTradeMessage('🔗 Binance trading enabled','System');
+  };
   window.onload = init;
 </script>
 
