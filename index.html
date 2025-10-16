@@ -1,7 +1,80 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <!-- (unchanged head content omitted for brevity) -->
+  <meta charset="UTF-8">
+  <title>Crypto Blitz Nexus Pro 3.0</title>
+  <style>
+    :root {
+      --green: #00ff88;
+      --red: #ff3860;
+    }
+    .live {
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.6em;
+      margin-bottom: 8px;
+    }
+    .live .dot {
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      background: var(--red);
+    }
+    .header {
+      padding: 18px 0 12px 0;
+      text-align: center;
+    }
+    .subtitle {
+      color: #999;
+      font-size: 1.05em;
+      margin-bottom: 17px;
+      margin-top: 2px;
+    }
+    .workspace {
+      max-width: 560px;
+      margin: 0 auto 32px auto;
+      padding: 24px;
+      background: #222;
+      border-radius: 10px;
+      box-shadow: 0 4px 32px rgba(12,20,61,0.17);
+      min-height: 200px;
+    }
+    .ws-header {
+      font-size: 1.2em;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+    .ws-feed {
+      background: #181f2f;
+      border-radius: 4px;
+      padding: 14px 12px 9px 12px;
+      min-height: 82px;
+      max-height: 195px;
+      overflow-y: auto;
+      font-size: 0.98em;
+    }
+    .message {
+      margin-bottom: 7px;
+    }
+    .timestamp {
+      color: #666;
+      font-size: 0.84em;
+      display: inline-block;
+      width: 58px;
+    }
+    #exportLogBtn {
+      margin-top: 16px;
+      padding: 8px 16px;
+      background: var(--green);
+      border: none;
+      border-radius: 5px;
+      color: #222;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 0.97em;
+    }
+  </style>
 </head>
 <body>
   <div class="header">
@@ -14,19 +87,26 @@
     <div class="subtitle">Self-Learning AI Scalping Terminal - Bulletproof Breakeven Strategy</div>
   </div>
 
-  <!-- (unchanged controls, performance-panel, sessions, container panels) -->
+  <!-- (unchanged controls, performance-panel, sessions, container panels go here) -->
 
   <div class="workspace">
-    <div class="ws-header">🤖 AI Trade Journal - Bulletproof Edition <span style="color:#00ff88" id="connectionStatus">🟢 READY</span></div>
-    <div class="ws-feed" id="feed">
-      <div class="message"><div class="timestamp">00:00</div><strong>AI:</strong> Bulletproof breakeven strategy initialized - All issues resolved.</div>
+    <div class="ws-header">
+      🤖 AI Trade Journal - Bulletproof Edition <span style="color:#00ff88" id="connectionStatus">🟢 READY</span>
     </div>
+    <div class="ws-feed" id="feed">
+      <div class="message">
+        <div class="timestamp">00:00</div>
+        <strong>AI:</strong> Bulletproof breakeven strategy initialized - All issues resolved.
+      </div>
+    </div>
+    <button id="exportLogBtn" onclick="exportTradeLog()">Export Trade Log (CSV)</button>
   </div>
 
   <script>
     // ▼ LIVE-TRADING PROXY INTEGRATION ▼
     const PROXY_URL = 'http://localhost:3001/api';
     let liveTradingEnabled = false;
+    let tradeLog = [];
 
     function toggleLive() {
       liveTradingEnabled = !liveTradingEnabled;
@@ -79,14 +159,32 @@
       el.innerHTML = `<div class="timestamp">${new Date().toLocaleTimeString()}</div><strong>${sender}:</strong> ${text}`;
       feed.appendChild(el);
       feed.scrollTop = feed.scrollHeight;
+      // Log every message for export
+      tradeLog.push({ time: new Date().toLocaleTimeString(), sender, text });
     }
 
-    // Replace your existing executeSetup calls on buttons:
-    // <button id="btc-alert" onclick="executeSetup('BTC')" ...>
-    // <button id="eth-alert" onclick="executeSetup('ETH')" ...>
+    function exportTradeLog() {
+      if (!tradeLog.length) {
+        alert("No trades to export yet!");
+        return;
+      }
+      // Build CSV
+      const headers = "Time,Sender,Message";
+      const rows = tradeLog.map(log => `"${log.time}","${log.sender}","${log.text.replace(/"/g,'""')}"`);
+      const csv = [headers, ...rows].join("\n");
+
+      // Create downloadable CSV file
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `trade_log_${Date.now()}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
 
     // (Rest of your script remains unchanged)
-    init();
+    if (typeof init === 'function') init();
   </script>
 </body>
 </html>
