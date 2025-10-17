@@ -15,6 +15,7 @@
         * { margin:0; padding:0; box-sizing:border-box; }
         body { font-family:'Rajdhani',sans-serif; background:linear-gradient(135deg,var(--dark),#050810); 
                color:var(--text); min-height:100vh; }
+
         .header { background:linear-gradient(90deg,var(--orange),var(--blue)); padding:15px; text-align:center; 
                   box-shadow:0 4px 20px rgba(255,107,53,0.3); position:relative; }
         .header h1 { font-family:'Orbitron'; font-size:2rem; font-weight:700; margin:0; 
@@ -25,6 +26,8 @@
                 border:2px solid var(--green); font-size:0.8rem; }
         .dot { width:6px; height:6px; border-radius:50%; background:var(--green); 
                margin-right:6px; animation:pulse 2s infinite; }
+
+        /* Enhanced Control Panel with Performance Stats */
         .controls { background:var(--panel); border:2px solid var(--border); border-radius:12px; 
                    margin:15px; padding:15px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px; }
         .control-group { display:flex; align-items:center; gap:10px; }
@@ -37,6 +40,8 @@
         .test-audio { background:linear-gradient(45deg,var(--purple),#4a5bbb); }
         .acknowledge-btn { background:linear-gradient(45deg,var(--yellow),#ff8800); }
         .reset-btn { background:linear-gradient(45deg,var(--red),#cc0000); }
+
+        /* NEW: Performance Dashboard with Reset Button */
         .performance-panel { background:var(--panel); border:2px solid var(--green); border-radius:12px; 
                             margin:15px; padding:15px; position:relative; }
         .perf-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; }
@@ -49,6 +54,7 @@
         .perf-stat { background:rgba(0,0,0,0.4); border-radius:8px; padding:10px; text-align:center; }
         .perf-value { font-family:'Orbitron'; font-size:1.2rem; font-weight:700; color:var(--green); }
         .perf-label { font-size:0.7rem; color:var(--text2); margin-top:3px; }
+
         .sessions { background:var(--panel); border:2px solid var(--border); border-radius:12px; 
                     margin:15px; padding:15px; }
         .sessions h2 { font-family:'Orbitron'; color:var(--orange); text-align:center; 
@@ -64,12 +70,15 @@
         .status-closed { color:var(--red); }
         .session-time { font-size:0.8rem; color:var(--text2); margin-bottom:8px; }
         .countdown { font-family:'Orbitron'; font-size:0.9rem; color:var(--yellow); }
+
         .container { display:grid; gap:15px; padding:15px; }
         @media (min-width:1024px) { .container { grid-template-columns:1fr 1fr; } }
+        
         .panel { background:var(--panel); border:2px solid var(--border); border-radius:12px; 
                  padding:15px; display:flex; flex-direction:column; }
         .btc-panel { border-color:var(--btc); box-shadow:0 0 20px rgba(247,147,26,0.1); }
         .eth-panel { border-color:var(--purple); box-shadow:0 0 20px rgba(98,126,234,0.1); }
+        
         .asset-header { display:flex; justify-content:space-between; align-items:center; 
                         margin-bottom:15px; padding-bottom:10px; border-bottom:1px solid var(--border); }
         .asset-title { font-family:'Orbitron'; font-size:1.3rem; font-weight:700; }
@@ -78,12 +87,14 @@
         .status { display:flex; flex-direction:column; align-items:flex-end; font-size:0.8rem; }
         .status-dot { width:6px; height:6px; border-radius:50%; background:var(--green); 
                       margin-bottom:3px; animation:pulse 2s infinite; }
+
         .price-display { background:rgba(0,0,0,0.4); border-radius:8px; padding:12px; 
                          margin-bottom:15px; text-align:center; }
         .current-price { font-family:'Orbitron'; font-size:1.5rem; font-weight:700; margin-bottom:6px; }
         .price-change { font-size:0.9rem; font-weight:600; }
         .price-up { color:var(--green); }
         .price-down { color:var(--red); }
+
         .section { margin-bottom:15px; }
         .section-title { font-family:'Orbitron'; font-size:1rem; color:var(--orange); 
                          margin-bottom:10px; text-transform:uppercase; }
@@ -98,6 +109,8 @@
         .medium { background:rgba(255,184,0,0.2); color:var(--yellow); }
         .range { font-family:'Orbitron'; font-weight:600; margin-bottom:3px; }
         .details { font-size:0.7rem; color:var(--text2); }
+
+        /* Enhanced timeframe and status indicators */
         .timeframe { font-size:0.6rem; background:var(--orange); color:#000; padding:1px 4px; 
                     border-radius:3px; font-weight:700; }
         .status-indicator { font-size:0.6rem; padding:1px 4px; border-radius:3px; font-weight:700; }
@@ -107,6 +120,8 @@
         .fresh { background:var(--blue); color:#000; }
         .filled { background:var(--red); color:#fff; }
         .partial { background:var(--yellow); color:#000; }
+
+        /* Enhanced trade panel with P&L tracking */
         .trade-panel { background:linear-gradient(135deg,rgba(255,107,53,0.08),rgba(0,212,255,0.08)); 
                        border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:15px; }
         .trade-title { font-family:'Orbitron'; color:var(--orange); margin-bottom:10px; 
@@ -120,6 +135,8 @@
         .target .value { color:var(--green); }
         .stop .value { color:var(--red); }
         .rr .value { color:var(--yellow); }
+
+        /* NEW: Trade Status Indicators */
         .trade-status { background:rgba(0,0,0,0.5); border-radius:5px; padding:8px; margin:8px 0; 
                        text-align:center; border:2px solid transparent; }
         .trade-active { border-color:var(--green); }
@@ -127,18 +144,21 @@
         .trade-target { border-color:var(--green); }
         .trade-invalid { border-color:var(--yellow); }
         .trade-breakeven { border-color:var(--blue); }
+
         .confluence { background:linear-gradient(135deg,var(--orange),var(--blue)); 
                       border-radius:10px; padding:10px; text-align:center; margin-bottom:10px; }
         .conf-label { font-size:0.7rem; margin-bottom:3px; }
         .conf-number { font-family:'Orbitron'; font-size:1.8rem; font-weight:700; margin-bottom:2px; }
         .conf-rating { font-size:0.8rem; font-weight:600; text-transform:uppercase; }
         .win-prob { font-size:0.7rem; margin-top:3px; opacity:0.9; }
+
         .alert { background:linear-gradient(45deg,var(--yellow),var(--orange)); border:none; 
                  border-radius:6px; padding:6px 12px; color:#000; font-family:'Orbitron'; 
                  font-size:0.7rem; font-weight:700; cursor:pointer; width:100%; 
                  text-transform:uppercase; margin-top:8px; }
         .alert:hover { transform:translateY(-1px); }
         .alert.pulsing { animation:alertPulse 1s infinite; }
+
         .workspace { position:fixed; bottom:15px; left:15px; right:15px; height:140px; 
                      background:var(--panel); border:2px solid var(--border); border-radius:12px; 
                      display:flex; flex-direction:column; z-index:1000; }
@@ -149,9 +169,11 @@
         .message { margin-bottom:4px; padding:3px 5px; background:rgba(0,0,0,0.3); 
                    border-radius:4px; border-left:2px solid var(--orange); }
         .timestamp { color:var(--text3); font-size:0.65rem; margin-bottom:1px; }
+
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
         @keyframes flash { 0%,100%{opacity:1} 50%{opacity:0.3} }
         @keyframes alertPulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.02)} }
+        
         @media (max-width:768px) { 
             .header h1 { font-size:1.4rem; }
             .sessions-grid { grid-template-columns:1fr 1fr; }
@@ -328,7 +350,7 @@
 
     <script>
         // ===== CRYPTO NEXUS BLITZ PRO 3.0 - BULLETPROOF EDITION =====
-        // ... [All your existing JavaScript remains unchanged up to the end] ...
+        // ... [ALL YOUR PREVIOUS SCRIPT CODE FROM YOUR ORIGINAL FILE REMAINS HERE, UNCHANGED] ...
 
         // ===== TRADE LOG EXPORT FEATURE =====
         function exportTrades(type) {
@@ -402,10 +424,15 @@
         // // Place real order here ONLY if liveMode == true
 
         // ===== PATCH: Ensure Live/Sim Mode state is loaded on startup =====
+        // Find your original init() function, and inside it, near the top, add:
+        // loadLiveMode();
+        // If you already have an init() function, make sure it includes this line.
+        // If you don't have one, here's an example:
+
+        // ===== Example init() PATCHED with loadLiveMode() =====
         function init() {
-            // ...existing code...
-            loadLiveMode(); // <-- add this line to load mode on startup
-            // ...existing code...
+            loadLiveMode();
+            // ... all your other code that runs on startup ...
             connectBinance();
             connectCoinbase();
             updateSessions();
@@ -426,8 +453,6 @@
             addTradeMessage('🛡️ Bulletproof Breakeven Strategy Initialized - All fixes applied', 'AI');
             addTradeMessage('📊 Signal generation: 4-8 per day | OB/FVG: Always visible | Trade monitoring: Real-time', 'AI');
         }
-
-        // ... [All your remaining JavaScript remains unchanged] ...
 
         document.addEventListener('DOMContentLoaded', init);
         window.addEventListener('beforeunload', () => {
