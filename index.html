@@ -468,7 +468,12 @@
                 reachedTarget2: setup.reachedTarget2 || false
             };
             
-            tradeDatabase.trades.push(trade);fetch('http://localhost:3001/auto-trade', {
+            tradeDatabase.trades.push(trade);
+
+console.log("Nexus is sending trade to backend:", trade);
+
+fetch('http://localhost:3001/auto-trade', {
+
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(trade)
