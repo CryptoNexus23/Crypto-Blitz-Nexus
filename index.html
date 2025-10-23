@@ -322,11 +322,14 @@
     const sentSignals = new Map();
     const SIGNAL_DEDUP_MS = 60000;
 
+    // Sizing mode: 'units' (default) or 'notional'
+    let sizingMode = 'units';
+
     // Portfolio equity (persisted)
     let portfolio = {
       startingEquity: 10000,
       equity: 10000,
-      riskPct: 0.005 // 0.5% default
+      riskPct: 0.005
     };
     function loadPortfolio() {
       const stored = localStorage.getItem('nexusPortfolio');
@@ -401,13 +404,10 @@
       setInterval(updateSessions, 1000);
       setInterval(() => updatePersistentLevels(), 15000);
       setInterval(() => updatePerformanceDisplay(), 5000);
-      // Apply learning decay hourly
       setInterval(() => applyDecayToPatterns(), 60 * 60 * 1000);
 
       setTimeout(() => {
-        if (currentPrices.btc > 0 && currentPrices.eth > 0) {
-          updatePersistentLevels();
-        }
+        if (currentPrices.btc > 0 && currentPrices.eth > 0) updatePersistentLevels();
       }, 3000);
       addTradeMessage('🛡️ Bulletproof Breakeven Strategy Initialized - All fixes applied', 'AI');
       addTradeMessage('📊 Signal generation: 4-8 per day | OB/FVG: Always visible | Trade monitoring: Real-time', 'AI');
@@ -503,21 +503,36 @@
       };
     }
 
+    // Decay with delta-time half-life
     function applyDecayToPatterns() {
       const halfLifeMs = (tradeDatabase.learningMeta?.decay?.halfLifeDays ?? 60) * 24 * 60 * 60 * 1000;
       const now = Date.now();
       for (const key in tradeDatabase.patterns) {
         const p = tradeDatabase.patterns[key];
         if (!p) continue;
-        const last = p.lastUpdated || p.firstSeen || now;
-        const ageMs = Math.max(0, now - last);
-        const decayFactor = Math.pow(0.5, ageMs / halfLifeMs);
-        p.weight = Math.max(0.2, Math.min(2.0, (p.weight ?? 1.0) * decayFactor));
+        const lastDecay = p.decayedAt || p.lastUpdated || p.firstSeen || now;
+        const deltaMs = Math.max(0, now - lastDecay);
+        if (deltaMs === 0) continue;
+        const factor = Math.pow(0.5, deltaMs / halfLifeMs);
+        p.weight = Math.max(0.2, Math.min(2.0, (p.weight ?? 1.0) * factor));
+        p.decayedAt = now;
       }
       saveTradeDatabase();
     }
 
     function recordTradeOutcome(asset, setup, outcome, absDollars) {
+      if (!isFinite(absDollars)) {
+        console.warn('Invalid PnL amount (NaN/Inf):', absDollars);
+        addTradeMessage('❌ Invalid PnL amount recorded (NaN/Inf) - trade ignored', 'System');
+        return;
+      }
+      if (absDollars === 0 && outcome !== 'BREAKEVEN') {
+        console.warn('Zero PnL recorded for non-breakeven outcome:', outcome);
+        addTradeMessage('⚠️ Zero PnL on non-breakeven trade - check sizing/levels', 'System');
+        // Optionally return; keeping it to continue record:
+        // return;
+      }
+
       const equityBefore = portfolio.equity;
       const signedProfit = outcome === 'WIN' ? absDollars : outcome === 'LOSS' ? -absDollars : 0;
 
@@ -533,6 +548,7 @@
         reachedTarget1: setup.reachedTarget1 || false,
         reachedTarget2: setup.reachedTarget2 || false,
         positionSize: setup.positionSize || 0,
+        positionNotional: setup.positionNotional || 0,
         equityAfter: 0
       };
 
@@ -709,11 +725,7 @@
       audioAlertActive = false;
       document.getElementById('acknowledgeBtn').style.display = 'none';
       if (alertInterval) { clearInterval(alertInterval); alertInterval = null; }
-      ['btc-alert', 'eth-alert'].forEach(id => {
-        const btn = document.getElementById(id);
-        if (btn) btn.classList.remove('pulsing');
-      });
-      addTradeMessage('🔕 Audio alerts acknowledged', 'System');
+      ['btc-alert', 'eth-alert'].forEach(id => {      addTradeMessage('🔕 Audio alerts acknowledged', 'System');
     }
 
     function adaptiveScan() {
@@ -766,7 +778,7 @@
       if (timeSinceLast < 60000) return;
       const momentum = calculateMomentum(asset);
       const sessionMultiplier = getSessionMultiplier();
-      const patternScore = calculatePatternScore(asset, currentPrice);
+      const patternScore = calculatePatternScore(asset);
       let baseConfluence = 8 + Math.floor(Math.random() * 8);
       baseConfluence += Math.floor(Math.abs(momentum) * 2);
       baseConfluence += Math.floor(sessionMultiplier * 1.5);
@@ -812,13 +824,23 @@
       setup.reachedTarget1 = false;
       setup.reachedTarget2 = false;
 
-      // Equity-based position sizing
       const entryAvg = (setup.entry.min + setup.entry.max) / 2;
       const stopDistance = Math.abs(entryAvg - setup.stop);
       const equityRisk = portfolio.equity * portfolio.riskPct;
-      const positionSize = stopDistance > 0 ? Math.floor(equityRisk / stopDistance) : 0;
-      setup.positionSize = Math.max(0, positionSize);
+
+      if (sizingMode === 'units') {
+        setup.positionSize = stopDistance > 0 ? Math.floor(equityRisk / stopDistance) : 0;
+        setup.positionNotional = 0;
+      } else {
+        setup.positionNotional = stopDistance > 0 ? Math.floor((equityRisk * entryAvg) / stopDistance) : 0;
+        setup.positionSize = 0;
+      }
       setup.entryAvg = entryAvg;
+
+      if ((sizingMode === 'units' && setup.positionSize === 0) ||
+          (sizingMode === 'notional' && setup.positionNotional === 0)) {
+        addTradeMessage('⚠️ Position size computed as 0 — check risk % or stop distance', 'System');
+      }
 
       activeTrades[asset] = setup;
       updateSetupDisplay(asset, setup);
@@ -826,7 +848,7 @@
       addTradeMessage(`🤖 AI SIGNAL: ${directionIcon} ${asset.toUpperCase()} ${direction} (${confidence}/20)`, 'AI');
       addTradeMessage(`├─ Entry: $${Math.round(setup.entry.min).toLocaleString()}-${Math.round(setup.entry.max).toLocaleString()}`, 'AI');
       addTradeMessage(`├─ Stop: $${Math.round(setup.stop).toLocaleString()} | Targets: $${Math.round(setup.t1).toLocaleString()}/$${Math.round(setup.t2).toLocaleString()}`, 'AI');
-      addTradeMessage(`└─ Size: ${setup.positionSize} units | Equity risk ${(portfolio.riskPct*100).toFixed(2)}% | Market: ${marketCondition}`, 'AI');
+      addTradeMessage(`└─ Size: ${sizingMode==='units'?setup.positionSize+' units':'$'+setup.positionNotional.toLocaleString()} | Equity risk ${(portfolio.riskPct*100).toFixed(2)}% | Market: ${marketCondition}`, 'AI');
       playSignalAudio(confidence);
       const alertBtn = document.getElementById(`${asset}-alert`);
       if (alertBtn) { alertBtn.classList.add('pulsing'); alertBtn.style.display = 'block'; }
@@ -869,6 +891,7 @@
           reduce_only: false,
           time_in_force: 'GTC',
           position_size: setup.positionSize || 0,
+          position_notional: setup.positionNotional || 0,
           equity_risk_pct: portfolio.riskPct
         };
         fetch('http://localhost:3001/auto-trade', {
@@ -888,8 +911,16 @@
       const currentPrice = currentPrices[asset];
       if (!currentPrice || currentPrice <= 0) return;
       const entryAvg = (trade.entry.min + trade.entry.max) / 2;
-      const unitPnL = (trade.direction === 'BULLISH') ? (currentPrice - entryAvg) : (entryAvg - currentPrice);
-      const dollarUnrealized = unitPnL * (trade.positionSize || 0);
+
+      let dollarUnrealized = 0;
+      if (sizingMode === 'units') {
+        const unitPnL = (trade.direction === 'BULLISH') ? (currentPrice - entryAvg) : (entryAvg - currentPrice);
+        dollarUnrealized = unitPnL * (trade.positionSize || 0);
+      } else {
+        const pctMove = (currentPrice - entryAvg) / entryAvg;
+        const signedPct = (trade.direction === 'BULLISH') ? pctMove : -pctMove;
+        dollarUnrealized = signedPct * (trade.positionNotional || 0);
+      }
 
       if (!trade.reachedTarget1 &&
           ((trade.direction === 'BULLISH' && currentPrice >= trade.t1) ||
@@ -906,8 +937,14 @@
       else if (trade.reachedTarget1 && !trade.reachedTarget2 &&
                ((trade.direction === 'BULLISH' && currentPrice >= trade.t2) ||
                 (trade.direction === 'BEARISH' && currentPrice <= trade.t2))) {
-        const unitProfit = Math.abs(trade.t2 - entryAvg);
-        const profitDollars = unitProfit * (trade.positionSize || 0);
+        let profitDollars = 0;
+        if (sizingMode === 'units') {
+          const unitProfit = Math.abs(trade.t2 - entryAvg);
+          profitDollars = unitProfit * (trade.positionSize || 0);
+        } else {
+          const pctProfit = Math.abs(trade.t2 - entryAvg) / entryAvg;
+          profitDollars = (trade.positionNotional || 0) * pctProfit;
+        }
         trade.status = 'TARGET2_HIT';
         trade.outcome = 'WIN';
         trade.profit = profitDollars;
@@ -930,8 +967,14 @@
       else if (!trade.reachedTarget1 &&
                ((trade.direction === 'BULLISH' && currentPrice <= (trade.originalStop || trade.stop)) ||
                 (trade.direction === 'BEARISH' && currentPrice >= (trade.originalStop || trade.stop)))) {
-        const unitLoss = Math.abs(currentPrice - entryAvg);
-        const lossDollars = unitLoss * (trade.positionSize || 0);
+        let lossDollars = 0;
+        if (sizingMode === 'units') {
+          const unitLoss = Math.abs(currentPrice - entryAvg);
+          lossDollars = unitLoss * (trade.positionSize || 0);
+        } else {
+          const pctLoss = Math.abs(currentPrice - entryAvg) / entryAvg;
+          lossDollars = (trade.positionNotional || 0) * pctLoss;
+        }
         trade.status = 'STOPPED';
         trade.outcome = 'LOSS';
         trade.profit = -lossDollars;
@@ -1179,15 +1222,22 @@
       const price = currentPrices[asset];
       const newLevels = calculateSetupLevels(asset, price, setup.direction, config);
       Object.assign(setup, newLevels);
-      // Recompute position size with current equity & riskPct
+
       const entryAvg = (setup.entry.min + setup.entry.max) / 2;
       const stopDistance = Math.abs(entryAvg - setup.stop);
       const equityRisk = portfolio.equity * portfolio.riskPct;
-      setup.positionSize = stopDistance > 0 ? Math.floor(equityRisk / stopDistance) : 0;
+
+      if (sizingMode === 'units') {
+        setup.positionSize = stopDistance > 0 ? Math.floor(equityRisk / stopDistance) : 0;
+        setup.positionNotional = 0;
+      } else {
+        setup.positionNotional = stopDistance > 0 ? Math.floor((equityRisk * entryAvg) / stopDistance) : 0;
+        setup.positionSize = 0;
+      }
       setup.entryAvg = entryAvg;
 
       updateSetupDisplay(asset, setup);
-      addTradeMessage(`🔧 ${asset.toUpperCase()}: Setup recalculated for ${riskMode} risk (size ${setup.positionSize})`, 'AI');
+      addTradeMessage(`🔧 ${asset.toUpperCase()}: Setup recalculated for ${riskMode} risk (${sizingMode==='units'?setup.positionSize+' units':'$'+setup.positionNotional})`, 'AI');
     }
 
     function updateSetupDisplay(asset, setup) {
@@ -1297,7 +1347,8 @@
       }
       const headers = [
         'timestamp','asset','direction','entry_min','entry_max','stop','t1','t2',
-        'entryPrice','outcome','profit','marketCondition','volatilityLevel','sessionActive','positionSize','equityAfter'
+        'entryPrice','outcome','profit','marketCondition','volatilityLevel','sessionActive',
+        'positionSize','positionNotional','equityAfter'
       ];
       const escape = (v) => {
         if (v === null || v === undefined) return '';
@@ -1322,6 +1373,7 @@
           tr.volatilityLevel || '',
           tr.sessionActive || '',
           tr.positionSize ?? s.positionSize ?? '',
+          tr.positionNotional          tr.positionNotional ?? s.positionNotional ?? '',
           tr.equityAfter ?? ''
         ].map(escape).join(',');
       })).join('\n');
