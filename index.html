@@ -1,4 +1,3 @@
-<!-- PART 1/2: Head, Styles, Markup -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -310,9 +309,9 @@
     <div class="ws-feed" id="feed">
       <div class="message"><div class="timestamp">00:00</div><strong>AI:</strong> Bulletproof breakeven strategy initialized - All issues resolved.</div>
     </div>
-  </div>  <!-- PART 2/2: Script -->
-  <script>
-    let priceHistory = { btc: [], eth: [] }, ws, coinbaseWS, reconnectAttempts = 0;
+  </div>
+  <!-- PART 2/4: Script start -->
+  <script>    let priceHistory = { btc: [], eth: [] }, ws, coinbaseWS, reconnectAttempts = 0;
     let currentPrices = { btc: 0, eth: 0 }, scanInterval = 3000;
     let persistentLevels = { btc: { ob: [], fvg: [] }, eth: { ob: [], fvg: [] } };
     let activeTrades = { btc: null, eth: null };
@@ -322,14 +321,11 @@
     const sentSignals = new Map();
     const SIGNAL_DEDUP_MS = 60000;
 
-    // Sizing mode: 'units' (default) or 'notional'
-    let sizingMode = 'units';
-
     // Portfolio equity (persisted)
     let portfolio = {
       startingEquity: 10000,
       equity: 10000,
-      riskPct: 0.005
+      riskPct: 0.005 // 0.5% default
     };
     function loadPortfolio() {
       const stored = localStorage.getItem('nexusPortfolio');
@@ -344,6 +340,10 @@
     function savePortfolio() {
       localStorage.setItem('nexusPortfolio', JSON.stringify(portfolio));
     }
+
+    // Minimum trade size guards
+    const MIN_UNITS = 1;
+    const MIN_NOTIONAL = 10;
 
     // Learning metadata
     const learningMeta = {
@@ -380,7 +380,8 @@
     let marketCondition = 'RANGING';
     let volatilityLevel = 'NORMAL';
 
-    const WS_URL = 'wss://stream.binance.com:9443/ws/btcusdt@ticker/ethusdt@ticker';
+    // Correct Binance combined stream URL
+    const WS_URL = 'wss://stream.binance.com:9443/stream?streams=btcusdt@ticker/ethusdt@ticker';
     const COINBASE_WS_URL = 'wss://ws-feed.exchange.coinbase.com';
 
     const sessions = [
@@ -407,7 +408,9 @@
       setInterval(() => applyDecayToPatterns(), 60 * 60 * 1000);
 
       setTimeout(() => {
-        if (currentPrices.btc > 0 && currentPrices.eth > 0) updatePersistentLevels();
+        if (currentPrices.btc > 0 && currentPrices.eth > 0) {
+          updatePersistentLevels();
+        }
       }, 3000);
       addTradeMessage('🛡️ Bulletproof Breakeven Strategy Initialized - All fixes applied', 'AI');
       addTradeMessage('📊 Signal generation: 4-8 per day | OB/FVG: Always visible | Trade monitoring: Real-time', 'AI');
@@ -510,26 +513,25 @@
       for (const key in tradeDatabase.patterns) {
         const p = tradeDatabase.patterns[key];
         if (!p) continue;
-        const lastDecay = p.decayedAt || p.lastUpdated || p.firstSeen || now;
-        const deltaMs = Math.max(0, now - lastDecay);
-        if (deltaMs === 0) continue;
-        const factor = Math.pow(0.5, deltaMs / halfLifeMs);
-        p.weight = Math.max(0.2, Math.min(2.0, (p.weight ?? 1.0) * factor));
-        p.decayedAt = now;
+        const last = p.lastUpdated || p.firstSeen || now;
+        const ageMs = Math.max(0, now - last);
+        const decayFactor = Math.pow(0.5, ageMs / halfLifeMs);
+        p.weight = Math.max(0.2, Math.min(2.0, (p.weight ?? 1.0) * decayFactor));
       }
       saveTradeDatabase();
     }
 
     function recordTradeOutcome(asset, setup, outcome, absDollars) {
-      if (!isFinite(absDollars)) {
-        console.warn('Invalid PnL amount (NaN/Inf):', absDollars);
-        addTradeMessage('❌ Invalid PnL amount recorded (NaN/Inf) - trade ignored', 'System');
+      // Strict validation: absDollars must be a finite, non-negative absolute amount
+      if (!isFinite(absDollars) || absDollars < 0) {
+        console.warn('Invalid PnL amount (negative/NaN/Inf):', absDollars);
+        addTradeMessage('❌ Invalid PnL amount recorded - trade ignored', 'System');
         return;
       }
       if (absDollars === 0 && outcome !== 'BREAKEVEN') {
         console.warn('Zero PnL recorded for non-breakeven outcome:', outcome);
         addTradeMessage('⚠️ Zero PnL on non-breakeven trade - check sizing/levels', 'System');
-        // Optionally return; keeping it to continue record:
+        // Optionally return; keeping record for visibility
         // return;
       }
 
@@ -548,7 +550,6 @@
         reachedTarget1: setup.reachedTarget1 || false,
         reachedTarget2: setup.reachedTarget2 || false,
         positionSize: setup.positionSize || 0,
-        positionNotional: setup.positionNotional || 0,
         equityAfter: 0
       };
 
@@ -725,7 +726,11 @@
       audioAlertActive = false;
       document.getElementById('acknowledgeBtn').style.display = 'none';
       if (alertInterval) { clearInterval(alertInterval); alertInterval = null; }
-      ['btc-alert', 'eth-alert'].forEach(id => {      addTradeMessage('🔕 Audio alerts acknowledged', 'System');
+      ['btc-alert', 'eth-alert'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.classList.remove('pulsing');
+      });
+      addTradeMessage('🔕 Audio alerts acknowledged', 'System');
     }
 
     function adaptiveScan() {
@@ -738,9 +743,7 @@
           updateTradeStatus(asset);
         }
       });
-    }
-
-    function detectMarketCondition() {
+    }    function detectMarketCondition() {
       ['btc', 'eth'].forEach(asset => {
         if (priceHistory[asset] && priceHistory[asset].length >= 5) {
           const recent = priceHistory[asset].slice(-5);
@@ -811,6 +814,7 @@
       return (probability - 50) / 50;
     }
 
+    // Position sizing: notional -> units
     function generateAISetup(asset, price, confidence, momentum) {
       const direction = momentum > 0 ? 'BULLISH' : 'BEARISH';
       const config = riskConfigs[riskMode];
@@ -828,18 +832,17 @@
       const stopDistance = Math.abs(entryAvg - setup.stop);
       const equityRisk = portfolio.equity * portfolio.riskPct;
 
-      if (sizingMode === 'units') {
-        setup.positionSize = stopDistance > 0 ? Math.floor(equityRisk / stopDistance) : 0;
-        setup.positionNotional = 0;
-      } else {
-        setup.positionNotional = stopDistance > 0 ? Math.floor((equityRisk * entryAvg) / stopDistance) : 0;
-        setup.positionSize = 0;
-      }
+      const positionNotional = stopDistance > 0 ? (equityRisk / stopDistance) * entryAvg : 0;
+      let positionSize = entryAvg > 0 ? Math.floor(positionNotional / entryAvg) : 0;
+
+      if (positionNotional > 0 && positionNotional < MIN_NOTIONAL) positionSize = 0;
+      if (positionSize > 0 && positionSize < MIN_UNITS) positionSize = 0;
+
+      setup.positionSize = Math.max(0, positionSize);
       setup.entryAvg = entryAvg;
 
-      if ((sizingMode === 'units' && setup.positionSize === 0) ||
-          (sizingMode === 'notional' && setup.positionNotional === 0)) {
-        addTradeMessage('⚠️ Position size computed as 0 — check risk % or stop distance', 'System');
+      if (setup.positionSize === 0) {
+        addTradeMessage('⚠️ Position size computed as 0 — check risk% or stop distance', 'System');
       }
 
       activeTrades[asset] = setup;
@@ -848,7 +851,7 @@
       addTradeMessage(`🤖 AI SIGNAL: ${directionIcon} ${asset.toUpperCase()} ${direction} (${confidence}/20)`, 'AI');
       addTradeMessage(`├─ Entry: $${Math.round(setup.entry.min).toLocaleString()}-${Math.round(setup.entry.max).toLocaleString()}`, 'AI');
       addTradeMessage(`├─ Stop: $${Math.round(setup.stop).toLocaleString()} | Targets: $${Math.round(setup.t1).toLocaleString()}/$${Math.round(setup.t2).toLocaleString()}`, 'AI');
-      addTradeMessage(`└─ Size: ${sizingMode==='units'?setup.positionSize+' units':'$'+setup.positionNotional.toLocaleString()} | Equity risk ${(portfolio.riskPct*100).toFixed(2)}% | Market: ${marketCondition}`, 'AI');
+      addTradeMessage(`└─ Size: ${setup.positionSize} units | Equity risk ${(portfolio.riskPct*100).toFixed(2)}% | Market: ${marketCondition}`, 'AI');
       playSignalAudio(confidence);
       const alertBtn = document.getElementById(`${asset}-alert`);
       if (alertBtn) { alertBtn.classList.add('pulsing'); alertBtn.style.display = 'block'; }
@@ -891,7 +894,6 @@
           reduce_only: false,
           time_in_force: 'GTC',
           position_size: setup.positionSize || 0,
-          position_notional: setup.positionNotional || 0,
           equity_risk_pct: portfolio.riskPct
         };
         fetch('http://localhost:3001/auto-trade', {
@@ -905,91 +907,127 @@
       } catch (e) { console.warn('triggerAutoTrade error', e); }
     }
 
-    function updateTradeStatus(asset) {
-      const trade = activeTrades[asset];
-      if (!trade) return;
-      const currentPrice = currentPrices[asset];
-      if (!currentPrice || currentPrice <= 0) return;
-      const entryAvg = (trade.entry.min + trade.entry.max) / 2;
+    function recalculateSetup(asset, setup) {
+      const config = riskConfigs[riskMode];
+      const price = currentPrices[asset];
+      const newLevels = calculateSetupLevels(asset, price, setup.direction, config);
+      Object.assign(setup, newLevels);
 
-      let dollarUnrealized = 0;
-      if (sizingMode === 'units') {
-        const unitPnL = (trade.direction === 'BULLISH') ? (currentPrice - entryAvg) : (entryAvg - currentPrice);
-        dollarUnrealized = unitPnL * (trade.positionSize || 0);
+      const entryAvg = (setup.entry.min + setup.entry.max) / 2;
+      const stopDistance = Math.abs(entryAvg - setup.stop);
+      const equityRisk = portfolio.equity * portfolio.riskPct;
+
+      const positionNotional = stopDistance > 0 ? (equityRisk / stopDistance) * entryAvg : 0;
+      let positionSize = entryAvg > 0 ? Math.floor(positionNotional / entryAvg) : 0;
+
+      if (positionNotional > 0 && positionNotional < MIN_NOTIONAL) positionSize = 0;
+      if (positionSize > 0 && positionSize < MIN_UNITS) positionSize = 0;
+
+      setup.positionSize = Math.max(0, positionSize);
+      setup.entryAvg = entryAvg;
+
+      updateSetupDisplay(asset, setup);
+      addTradeMessage(`🔧 ${asset.toUpperCase()}: Setup recalculated for ${riskMode} risk (size ${setup.positionSize})`, 'AI');
+    }
+
+    function updateSetupDisplay(asset, setup) {
+      document.getElementById(`${asset}-entry`).textContent =
+        `$${Math.round(setup.entry.min).toLocaleString()}-${Math.round(setup.entry.max).toLocaleString()}`;
+      document.getElementById(`${asset}-stop`).textContent =
+        `$${Math.round(setup.stop).toLocaleString()}`;
+      document.getElementById(`${asset}-t1`).textContent =
+        `$${Math.round(setup.t1).toLocaleString()}`;
+      document.getElementById(`${asset}-t2`).textContent =
+        `$${Math.round(setup.t2).toLocaleString()}`;
+      const rr = Math.abs(setup.t2 - setup.entry.min) / Math.abs(setup.entry.min - setup.stop);
+      document.getElementById(`${asset}-rr`).textContent = `1:${rr.toFixed(1)}`;
+      document.getElementById(`${asset}-conf`).textContent = setup.confidence;
+      document.getElementById(`${asset}-prob`).textContent =
+        `Historical Win Rate: ${setup.probability || 50}%`;
+      const rating = document.getElementById(`${asset}-rating`);
+      const alertBtn = document.getElementById(`${asset}-alert`);
+      if (setup.confidence >= 18) {
+        rating.textContent = 'MAXIMUM'; rating.style.color = '#00ff88';
+        alertBtn.textContent = `🚨 ${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} ${setup.direction} MAX`;
+      } else if (setup.confidence >= 15) {
+        rating.textContent = 'HIGH'; rating.style.color = '#ffb800';
+        alertBtn.textContent = `🚨 ${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} ${setup.direction} HIGH`;
+      } else if (setup.confidence >= 10) {
+        rating.textContent = 'MEDIUM'; rating.style.color = '#00d4ff';
+        alertBtn.textContent = `🚨 ${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} ${setup.direction} MED`;
       } else {
-        const pctMove = (currentPrice - entryAvg) / entryAvg;
-        const signedPct = (trade.direction === 'BULLISH') ? pctMove : -pctMove;
-        dollarUnrealized = signedPct * (trade.positionNotional || 0);
+        rating.textContent = 'LOW'; rating.style.color = '#ff4757';
+        alertBtn.textContent = `🚨 ${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} ${setup.direction} LOW`;
       }
+      alertBtn.style.display = 'block';
+      updateTradeStatusDisplay(asset, `${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} TRADE READY - CLICK TO EXECUTE`, 'trade-active');
+    }
 
-      if (!trade.reachedTarget1 &&
-          ((trade.direction === 'BULLISH' && currentPrice >= trade.t1) ||
-           (trade.direction === 'BEARISH' && currentPrice <= trade.t1))) {
-        trade.reachedTarget1 = true;
-        trade.originalStop = trade.stop;
-        trade.stop = entryAvg;
-        updateTradeStatusDisplay(asset, '🎯 TARGET 1 HIT - RISK-FREE TRADE 🛡️', 'trade-breakeven');
-        addTradeMessage(`🎯 ${asset.toUpperCase()} TARGET 1 HIT - Stop moved to breakeven ($${Math.round(entryAvg)})`, 'Trade');
-        addTradeMessage(`🛡️ Risk eliminated - Running ${trade.direction} to Target 2...`, 'Trade');
-        document.getElementById(`${asset}-stop`).textContent = `$${Math.round(trade.stop).toLocaleString()}`;
-        document.getElementById(`${asset}-stop`).style.color = 'var(--blue)';
-      }
-      else if (trade.reachedTarget1 && !trade.reachedTarget2 &&
-               ((trade.direction === 'BULLISH' && currentPrice >= trade.t2) ||
-                (trade.direction === 'BEARISH' && currentPrice <= trade.t2))) {
-        let profitDollars = 0;
-        if (sizingMode === 'units') {
-          const unitProfit = Math.abs(trade.t2 - entryAvg);
-          profitDollars = unitProfit * (trade.positionSize || 0);
-        } else {
-          const pctProfit = Math.abs(trade.t2 - entryAvg) / entryAvg;
-          profitDollars = (trade.positionNotional || 0) * pctProfit;
-        }
-        trade.status = 'TARGET2_HIT';
-        trade.outcome = 'WIN';
-        trade.profit = profitDollars;
-        updateTradeStatusDisplay(asset, '🚀 TARGET 2 HIT - FULL WIN! ✅', 'trade-target');
-        recordTradeOutcome(asset, trade, 'WIN', Math.abs(profitDollars));
-        addTradeMessage(`🚀 ${asset.toUpperCase()} TARGET 2 HIT: +$${Math.round(profitDollars)} - FULL WIN!`, 'Trade');
-        setTimeout(() => { activeTrades[asset] = null; clearTradeDisplay(asset); }, 5000);
-      }
-      else if (trade.reachedTarget1 && !trade.reachedTarget2 &&
-               ((trade.direction === 'BULLISH' && currentPrice <= trade.stop) ||
-                (trade.direction === 'BEARISH' && currentPrice >= trade.stop))) {
-        trade.status = 'BREAKEVEN';
-        trade.outcome = 'BREAKEVEN';
-        trade.profit = 0;
-        updateTradeStatusDisplay(asset, '🔄 BREAKEVEN STOP HIT - CAPITAL PROTECTED 🛡️', 'trade-breakeven');
-        recordTradeOutcome(asset, trade, 'BREAKEVEN', 0);
-        addTradeMessage(`🔄 ${asset.toUpperCase()} BREAKEVEN: $0 - Capital protected after T1 hit`, 'Trade');
-        setTimeout(() => { activeTrades[asset] = null; clearTradeDisplay(asset); }, 5000);
-      }
-      else if (!trade.reachedTarget1 &&
-               ((trade.direction === 'BULLISH' && currentPrice <= (trade.originalStop || trade.stop)) ||
-                (trade.direction === 'BEARISH' && currentPrice >= (trade.originalStop || trade.stop)))) {
-        let lossDollars = 0;
-        if (sizingMode === 'units') {
-          const unitLoss = Math.abs(currentPrice - entryAvg);
-          lossDollars = unitLoss * (trade.positionSize || 0);
-        } else {
-          const pctLoss = Math.abs(currentPrice - entryAvg) / entryAvg;
-          lossDollars = (trade.positionNotional || 0) * pctLoss;
-        }
-        trade.status = 'STOPPED';
-        trade.outcome = 'LOSS';
-        trade.profit = -lossDollars;
-        updateTradeStatusDisplay(asset, '❌ STOP LOSS HIT - TRADE CLOSED', 'trade-stopped');
-        recordTradeOutcome(asset, trade, 'LOSS', Math.abs(lossDollars));
-        addTradeMessage(`❌ ${asset.toUpperCase()} STOP LOSS: -$${Math.round(lossDollars)} (before T1)`, 'Trade');
-        setTimeout(() => { activeTrades[asset] = null; clearTradeDisplay(asset); }, 5000);
-      }
-      else if (trade.status === 'ACTIVE') {
-        const pnlElement = document.getElementById(`${asset}-pnl`);
-        if (pnlElement) {
-          pnlElement.textContent = `${dollarUnrealized >= 0 ? '+' : ''}$${Math.round(dollarUnrealized)}`;
-          pnlElement.style.color = dollarUnrealized >= 0 ? 'var(--green)' : 'var(--red)';
-        }
-      }
+    function updatePerformanceDisplay() {
+      const perf = tradeDatabase.performance;
+      document.getElementById('totalTrades').textContent = perf.totalTrades;
+      document.getElementById('winRate').textContent = (perf.winRate || 0).toFixed(1) + '%';
+      document.getElementById('profitFactor').textContent = (isFinite(perf.profitFactor) ? perf.profitFactor : 0).toFixed(2);
+      document.getElementById('avgWin').textContent = '$' + Math.round(perf.avgWin || 0);
+      document.getElementById('avgLoss').textContent = '$' + Math.round(perf.avgLoss || 0);
+      document.getElementById('breakevenRate').textContent = (perf.breakevenRate || 0).toFixed(1) + '%';
+      const learningStatus = tradeDatabase.trades.length < 10 ? 'LEARNING' :
+                             perf.winRate > 60 ? 'OPTIMIZED' :
+                             perf.winRate > 45 ? 'ADAPTING' : 'CALIBRATING';
+      document.getElementById('connectionStatus').textContent = `🟢 ${learningStatus}`;
+    }
+
+    function updateSessions() {
+      const now = new Date(), utc = now.getUTCHours();
+      const grid = document.getElementById('sessionsGrid');
+      if (!grid) return;
+      grid.innerHTML = '';
+      sessions.forEach(s => {
+        const isOpen = (s.start < s.end) ? (utc >= s.start && utc < s.end) : (utc >= s.start || utc < s.end);
+        const next = isOpen ? s.end : s.start;
+        const hours = next > utc ? next - utc : (24 - utc) + next;
+        const mins = Math.round((hours - Math.floor(hours)) * 60);
+        grid.innerHTML += `<div class="session ${isOpen?'open':''}">
+          <div class="session-name">${s.name}</div>
+          <div class="session-status status-${isOpen?'open':'closed'}">${isOpen?'OPEN':'CLOSED'}</div>
+          <div class="session-time">${s.start.toString().padStart(2,'0')}:00-${s.end.toString().padStart(2,'0')}:00 ${s.tz}</div>
+          <div class="countdown">${Math.floor(hours)}h ${mins}m</div>
+        </div>`;
+      });
+    }
+
+    function getCurrentActiveSession() {
+      const now = new Date(), utc = now.getUTCHours();
+      return sessions.find(s => {
+        const isOpen = (s.start < s.end) ? (utc >= s.start && utc < s.end) : (utc >= s.start || utc < s.end);
+        return isOpen;
+      })?.name || 'None';
+    }
+
+    function getSessionMultiplier() {
+      const now = new Date(), utc = now.getUTCHours();
+      if (utc >= 13 && utc <= 17) return 1.4;
+      else if ((utc >= 8 && utc <= 17) || (utc >= 13 && utc <= 22)) return 1.2;
+      else return 0.9;
+    }
+
+    function addTradeMessage(msg, sender) {
+      const feed =    function addTradeMessage(msg, sender) {
+      const feed = document.getElementById('feed');
+      if (!feed) return;
+      const time = new Date().toLocaleTimeString('en-US', { hour12:false, hour:'2-digit', minute:'2-digit' });
+      const div = document.createElement('div');
+      div.className = 'message';
+      let borderColor = 'var(--orange)';
+      if (sender === 'AI') borderColor = 'var(--purple)';
+      else if (sender === 'Trade') borderColor = 'var(--green)';
+      else if (sender === 'Alert') borderColor = 'var(--red)';
+      else if (sender === 'Execute') borderColor = 'var(--blue)';
+      div.style.borderLeftColor = borderColor;
+      div.innerHTML = `<div class="timestamp">${time}</div><strong>${sender}:</strong> ${msg}`;
+      feed.appendChild(div);
+      feed.scrollTop = feed.scrollHeight;
+      while (feed.children.length > 20) feed.removeChild(feed.firstChild);
     }
 
     function updateTradeStatusDisplay(asset, statusText, statusClass) {
@@ -1018,6 +1056,93 @@
       }
     }
 
+    function updateTradeStatus(asset) {
+      const trade = activeTrades[asset];
+      if (!trade) return;
+      const currentPrice = currentPrices[asset];
+      if (!currentPrice || currentPrice <= 0) return;
+      const entryAvg = (trade.entry.min + trade.entry.max) / 2;
+
+      // Units-based unrealized PnL (display/execution uses units)
+      const unitPnL = (trade.direction === 'BULLISH') ? (currentPrice - entryAvg) : (entryAvg - currentPrice);
+      const dollarUnrealized = unitPnL * (trade.positionSize || 0);
+
+      if (!trade.reachedTarget1 &&
+          ((trade.direction === 'BULLISH' && currentPrice >= trade.t1) ||
+           (trade.direction === 'BEARISH' && currentPrice <= trade.t1))) {
+        trade.reachedTarget1 = true;
+        trade.originalStop = trade.stop;
+        trade.stop = entryAvg;
+        updateTradeStatusDisplay(asset, '🎯 TARGET 1 HIT - RISK-FREE TRADE 🛡️', 'trade-breakeven');
+        addTradeMessage(`🎯 ${asset.toUpperCase()} TARGET 1 HIT - Stop moved to breakeven ($${Math.round(entryAvg)})`, 'Trade');
+        addTradeMessage(`🛡️ Risk eliminated - Running ${trade.direction} to Target 2...`, 'Trade');
+        document.getElementById(`${asset}-stop`).textContent = `$${Math.round(trade.stop).toLocaleString()}`;
+        document.getElementById(`${asset}-stop`).style.color = 'var(--blue)';
+      }
+      else if (trade.reachedTarget1 && !trade.reachedTarget2 &&
+               ((trade.direction === 'BULLISH' && currentPrice >= trade.t2) ||
+                (trade.direction === 'BEARISH' && currentPrice <= trade.t2))) {
+        const unitProfit = Math.abs(trade.t2 - entryAvg);
+        const profitDollars = unitProfit * (trade.positionSize || 0);
+        trade.status = 'TARGET2_HIT';
+        trade.outcome = 'WIN';
+        trade.profit = profitDollars;
+        updateTradeStatusDisplay(asset, '🚀 TARGET 2 HIT - FULL WIN! ✅', 'trade-target');
+        recordTradeOutcome(asset, trade, 'WIN', Math.abs(profitDollars));
+        addTradeMessage(`🚀 ${asset.toUpperCase()} TARGET 2 HIT: +$${Math.round(profitDollars)} - FULL WIN!`, 'Trade');
+        setTimeout(() => { activeTrades[asset] = null; clearTradeDisplay(asset); }, 5000);
+      }
+      else if (trade.reachedTarget1 && !trade.reachedTarget2 &&
+               ((trade.direction === 'BULLISH' && currentPrice <= trade.stop) ||
+                (trade.direction === 'BEARISH' && currentPrice >= trade.stop))) {
+        trade.status = 'BREAKEVEN';
+        trade.outcome = 'BREAKEVEN';
+        trade.profit = 0;
+        updateTradeStatusDisplay(asset, '🔄 BREAKEVEN STOP HIT - CAPITAL PROTECTED 🛡️', 'trade-breakeven');
+        recordTradeOutcome(asset, trade, 'BREAKEVEN', 0);
+        addTradeMessage(`🔄 ${asset.toUpperCase()} BREAKEVEN: $0 - Capital protected after T1 hit`, 'Trade');
+        setTimeout(() => { activeTrades[asset] = null; clearTradeDisplay(asset); }, 5000);
+      }
+      else if (!trade.reachedTarget1 &&
+               ((trade.direction === 'BULLISH' && currentPrice <= (trade.originalStop || trade.stop)) ||
+                (trade.direction === 'BEARISH' && currentPrice >= (trade.originalStop || trade.stop)))) {
+        const unitLoss = Math.abs(currentPrice - entryAvg);
+        const lossDollars = unitLoss * (trade.positionSize || 0);
+        trade.status = 'STOPPED';
+        trade.outcome = 'LOSS';
+        trade.profit = -lossDollars;
+        updateTradeStatusDisplay(asset, '❌ STOP LOSS HIT - TRADE CLOSED', 'trade-stopped');
+        recordTradeOutcome(asset, trade, 'LOSS', Math.abs(lossDollars));
+        addTradeMessage(`❌ ${asset.toUpperCase()} STOP LOSS: -$${Math.round(lossDollars)} (before T1)`, 'Trade');
+        setTimeout(() => { activeTrades[asset] = null; clearTradeDisplay(asset); }, 5000);
+      }
+      else if (trade.status === 'ACTIVE') {
+        const pnlElement = document.getElementById(`${asset}-pnl`);
+        if (pnlElement) {
+          pnlElement.textContent = `${dollarUnrealized >= 0 ? '+' : ''}$${Math.round(dollarUnrealized)}`;
+          pnlElement.style.color = dollarUnrealized >= 0 ? 'var(--green)' : 'var(--red)';
+        }
+      }
+    }
+
+    function calculateSetupLevels(asset, price, direction, config) {
+      const entry = {
+        min: price * (direction === 'BULLISH' ? 0.9995 : 1.0005),
+        max: price * (direction === 'BULLISH' ? 1.0005 : 0.9995)
+      };
+      let stop, t1, t2;
+      if (direction === 'BULLISH') {
+        stop = price * (1 - config.stopPct);
+        t1 = price * (1 + (config.stopPct * config.target1));
+        t2 = price * (1 + (config.stopPct * config.target2));
+      } else {
+        stop = price * (1 + config.stopPct);
+        t1 = price * (1 - (config.stopPct * config.target1));
+        t2 = price * (1 - (config.stopPct * config.target2));
+      }
+      return { entry, stop, t1, t2 };
+    }
+
     function connectBinance() {
       try {
         ws = new WebSocket(WS_URL);
@@ -1025,16 +1150,19 @@
           addTradeMessage('🟢 Binance connected - Market data streaming', 'System');
           reconnectAttempts = 0;
         };
+        ws.onerror = (e) => { console.warn('Binance WS error', e); };
         ws.onmessage = (e) => {
           try {
-            const data = JSON.parse(e.data);
-            if (data.s === 'BTCUSDT') updatePrice('btc', data);
-            if (data.s === 'ETHUSDT') updatePrice('eth', data);
+            const msg = JSON.parse(e.data);
+            const payload = msg?.data || msg;
+            const s = payload?.s;
+            if (s === 'BTCUSDT') updatePrice('btc', payload);
+            if (s === 'ETHUSDT') updatePrice('eth', payload);
           } catch (error) {
             console.log('WebSocket data error:', error);
           }
         };
-        ws.onclose = () => setTimeout(reconnect, 3000);
+        ws.onclose = () => setTimeout(reconnect, 2000);
       } catch {
         startFallback();
       }
@@ -1081,14 +1209,24 @@
     }
 
     function startFallback() {
+      addTradeMessage('🔁 Using REST fallback (Binance)', 'System');
       setInterval(async () => {
         try {
-          const response = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbols=["BTCUSDT","ETHUSDT"]');
-          const data = await response.json();
-          const btc = data.find(item => item.symbol === 'BTCUSDT');
-          const eth = data.find(item => item.symbol === 'ETHUSDT');
-          if (btc) updatePrice('btc', btc);
-          if (eth) updatePrice('eth', eth);
+          const resp = await fetch('https://api.binance.com/api/v3/ticker/price?symbols=%5B%22BTCUSDT%22,%22ETHUSDT%22%5D');
+          const prices = await resp.json();
+          const resp24 = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbols=%5B%22BTCUSDT%22,%22ETHUSDT%22%5D');
+          const stats = await resp24.json();
+          const mapStats = Object.fromEntries((stats || []).map(s => [s.symbol, s]));
+          const btcP = (prices || []).find(x => x.symbol === 'BTCUSDT');
+          const ethP = (prices || []).find(x => x.symbol === 'ETHUSDT');
+          if (btcP) {
+            const st = mapStats['BTCUSDT'] || {};
+            updatePrice('btc', { s:'BTCUSDT', c: btcP.price, P: st.priceChangePercent, p: st.priceChange });
+          }
+          if (ethP) {
+            const st = mapStats['ETHUSDT'] || {};
+            updatePrice('eth', { s:'ETHUSDT', c: ethP.price, P: st.priceChangePercent, p: st.priceChange });
+          }
         } catch {
           addTradeMessage('❌ Connection error - Retrying...', 'System');
         }
@@ -1197,149 +1335,7 @@
           </div>`
         ).join('');
       }
-    }
-
-    function calculateSetupLevels(asset, price, direction, config) {
-      const entry = {
-        min: price * (direction === 'BULLISH' ? 0.9995 : 1.0005),
-        max: price * (direction === 'BULLISH' ? 1.0005 : 0.9995)
-      };
-      let stop, t1, t2;
-      if (direction === 'BULLISH') {
-        stop = price * (1 - config.stopPct);
-        t1 = price * (1 + (config.stopPct * config.target1));
-        t2 = price * (1 + (config.stopPct * config.target2));
-      } else {
-        stop = price * (1 + config.stopPct);
-        t1 = price * (1 - (config.stopPct * config.target1));
-        t2 = price * (1 - (config.stopPct * config.target2));
-      }
-      return { entry, stop, t1, t2 };
-    }
-
-    function recalculateSetup(asset, setup) {
-      const config = riskConfigs[riskMode];
-      const price = currentPrices[asset];
-      const newLevels = calculateSetupLevels(asset, price, setup.direction, config);
-      Object.assign(setup, newLevels);
-
-      const entryAvg = (setup.entry.min + setup.entry.max) / 2;
-      const stopDistance = Math.abs(entryAvg - setup.stop);
-      const equityRisk = portfolio.equity * portfolio.riskPct;
-
-      if (sizingMode === 'units') {
-        setup.positionSize = stopDistance > 0 ? Math.floor(equityRisk / stopDistance) : 0;
-        setup.positionNotional = 0;
-      } else {
-        setup.positionNotional = stopDistance > 0 ? Math.floor((equityRisk * entryAvg) / stopDistance) : 0;
-        setup.positionSize = 0;
-      }
-      setup.entryAvg = entryAvg;
-
-      updateSetupDisplay(asset, setup);
-      addTradeMessage(`🔧 ${asset.toUpperCase()}: Setup recalculated for ${riskMode} risk (${sizingMode==='units'?setup.positionSize+' units':'$'+setup.positionNotional})`, 'AI');
-    }
-
-    function updateSetupDisplay(asset, setup) {
-      document.getElementById(`${asset}-entry`).textContent =
-        `$${Math.round(setup.entry.min).toLocaleString()}-${Math.round(setup.entry.max).toLocaleString()}`;
-      document.getElementById(`${asset}-stop`).textContent =
-        `$${Math.round(setup.stop).toLocaleString()}`;
-      document.getElementById(`${asset}-t1`).textContent =
-        `$${Math.round(setup.t1).toLocaleString()}`;
-      document.getElementById(`${asset}-t2`).textContent =
-        `$${Math.round(setup.t2).toLocaleString()}`;
-      const rr = Math.abs(setup.t2 - setup.entry.min) / Math.abs(setup.entry.min - setup.stop);
-      document.getElementById(`${asset}-rr`).textContent = `1:${rr.toFixed(1)}`;
-      document.getElementById(`${asset}-conf`).textContent = setup.confidence;
-      document.getElementById(`${asset}-prob`).textContent =
-        `Historical Win Rate: ${setup.probability || 50}%`;
-      const rating = document.getElementById(`${asset}-rating`);
-      const alertBtn = document.getElementById(`${asset}-alert`);
-      if (setup.confidence >= 18) {
-        rating.textContent = 'MAXIMUM'; rating.style.color = '#00ff88';
-        alertBtn.textContent = `🚨 ${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} ${setup.direction} MAX`;
-      } else if (setup.confidence >= 15) {
-        rating.textContent = 'HIGH'; rating.style.color = '#ffb800';
-        alertBtn.textContent = `🚨 ${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} ${setup.direction} HIGH`;
-      } else if (setup.confidence >= 10) {
-        rating.textContent = 'MEDIUM'; rating.style.color = '#00d4ff';
-        alertBtn.textContent = `🚨 ${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} ${setup.direction} MED`;
-      } else {
-        rating.textContent = 'LOW'; rating.style.color = '#ff4757';
-        alertBtn.textContent = `🚨 ${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} ${setup.direction} LOW`;
-      }
-      alertBtn.style.display = 'block';
-      updateTradeStatusDisplay(asset, `${setup.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} TRADE READY - CLICK TO EXECUTE`, 'trade-active');
-    }
-
-    function updatePerformanceDisplay() {
-      const perf = tradeDatabase.performance;
-      document.getElementById('totalTrades').textContent = perf.totalTrades;
-      document.getElementById('winRate').textContent = (perf.winRate || 0).toFixed(1) + '%';
-      document.getElementById('profitFactor').textContent = (isFinite(perf.profitFactor) ? perf.profitFactor : 0).toFixed(2);
-      document.getElementById('avgWin').textContent = '$' + Math.round(perf.avgWin || 0);
-      document.getElementById('avgLoss').textContent = '$' + Math.round(perf.avgLoss || 0);
-      document.getElementById('breakevenRate').textContent = (perf.breakevenRate || 0).toFixed(1) + '%';
-      const learningStatus = tradeDatabase.trades.length < 10 ? 'LEARNING' :
-                             perf.winRate > 60 ? 'OPTIMIZED' :
-                             perf.winRate > 45 ? 'ADAPTING' : 'CALIBRATING';
-      document.getElementById('connectionStatus').textContent = `🟢 ${learningStatus}`;
-    }
-
-    function updateSessions() {
-      const now = new Date(), utc = now.getUTCHours();
-      const grid = document.getElementById('sessionsGrid');
-      if (!grid) return;
-      grid.innerHTML = '';
-      sessions.forEach(s => {
-        const isOpen = (s.start < s.end) ? (utc >= s.start && utc < s.end) : (utc >= s.start || utc < s.end);
-        const next = isOpen ? s.end : s.start;
-        const hours = next > utc ? next - utc : (24 - utc) + next;
-        const mins = Math.round((hours - Math.floor(hours)) * 60);
-        grid.innerHTML += `<div class="session ${isOpen?'open':''}">
-          <div class="session-name">${s.name}</div>
-          <div class="session-status status-${isOpen?'open':'closed'}">${isOpen?'OPEN':'CLOSED'}</div>
-          <div class="session-time">${s.start.toString().padStart(2,'0')}:00-${s.end.toString().padStart(2,'0')}:00 ${s.tz}</div>
-          <div class="countdown">${Math.floor(hours)}h ${mins}m</div>
-        </div>`;
-      });
-    }
-
-    function getCurrentActiveSession() {
-      const now = new Date(), utc = now.getUTCHours();
-      return sessions.find(s => {
-        const isOpen = (s.start < s.end) ? (utc >= s.start && utc < s.end) : (utc >= s.start || utc < s.end);
-        return isOpen;
-      })?.name || 'None';
-    }
-
-    function getSessionMultiplier() {
-      const now = new Date(), utc = now.getUTCHours();
-      if (utc >= 13 && utc <= 17) return 1.4;
-      else if ((utc >= 8 && utc <= 17) || (utc >= 13 && utc <= 22)) return 1.2;
-      else return 0.9;
-    }
-
-    function addTradeMessage(msg, sender) {
-      const feed = document.getElementById('feed');
-      if (!feed) return;
-      const time = new Date().toLocaleTimeString('en-US', { hour12:false, hour:'2-digit', minute:'2-digit' });
-      const div = document.createElement('div');
-      div.className = 'message';
-      let borderColor = 'var(--orange)';
-      if (sender === 'AI') borderColor = 'var(--purple)';
-      else if (sender === 'Trade') borderColor = 'var(--green)';
-      else if (sender === 'Alert') borderColor = 'var(--red)';
-      else if (sender === 'Execute') borderColor = 'var(--blue)';
-      div.style.borderLeftColor = borderColor;
-      div.innerHTML = `<div class="timestamp">${time}</div><strong>${sender}:</strong> ${msg}`;
-      feed.appendChild(div);
-      feed.scrollTop = feed.scrollHeight;
-      while (feed.children.length > 20) feed.removeChild(feed.firstChild);
-    }
-
-    function exportTradesCSV() {
+    }    function exportTradesCSV() {
       const rows = tradeDatabase.trades || [];
       if (!rows.length) {
         addTradeMessage('ℹ️ No trades to export', 'System');
@@ -1348,7 +1344,7 @@
       const headers = [
         'timestamp','asset','direction','entry_min','entry_max','stop','t1','t2',
         'entryPrice','outcome','profit','marketCondition','volatilityLevel','sessionActive',
-        'positionSize','positionNotional','equityAfter'
+        'positionSize','equityAfter'
       ];
       const escape = (v) => {
         if (v === null || v === undefined) return '';
@@ -1373,7 +1369,6 @@
           tr.volatilityLevel || '',
           tr.sessionActive || '',
           tr.positionSize ?? s.positionSize ?? '',
-          tr.positionNotional          tr.positionNotional ?? s.positionNotional ?? '',
           tr.equityAfter ?? ''
         ].map(escape).join(',');
       })).join('\n');
