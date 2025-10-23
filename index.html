@@ -184,7 +184,7 @@
     <div class="header">
         <div class="live"><div class="dot"></div>LIVE AI</div>
         <h1>Crypto Blitz Nexus Pro 3.0</h1>
-        <div class="subtitle">NEXUS 3.6 COMPLETE - Fixed Win Rate | BTC P&L | Learning Preservation ($10/trade)</div>
+        <div class="subtitle">Self-Learning AI Scalping Terminal - Bulletproof Breakeven Strategy</div>
     </div>
 
     <div class="controls">
@@ -668,7 +668,7 @@
 
         function detectMarketCondition() {
             ['btc', 'eth'].forEach(asset => {
-                if (priceHistory[asset] and priceHistory[asset].length >= 5) {
+                if (priceHistory[asset] && priceHistory[asset].length >= 5) {
                     const recent = priceHistory[asset].slice(-5);
                     const trend = recent[recent.length - 1].price - recent[0].price;
                     const avgChange = recent.reduce((sum, p) => sum + Math.abs(p.change || 0), 0) / recent.length;
@@ -694,7 +694,7 @@
         }
 
         function updateScanRate() {
-            document.getElementById('scanRate').textContent =
+            document.getElementById('scanRate').textContent = 
                 scanInterval < 2000 ? 'RAPID' :
                 scanInterval < 4000 ? 'ACTIVE' : 'NORMAL';
         }
@@ -824,7 +824,7 @@
             const currentPrice = currentPrices[asset];
             if (!currentPrice || currentPrice <= 0) return;
             const entryAvg = (trade.entry.min + trade.entry.max) / 2;
-            if (!trade.reachedTarget1 &&
+            if (!trade.reachedTarget1 && 
                 ((trade.direction === 'BULLISH' && currentPrice >= trade.t1) ||
                  (trade.direction === 'BEARISH' && currentPrice <= trade.t1))) {
                 trade.reachedTarget1 = true;
@@ -865,7 +865,7 @@
                     clearTradeDisplay(asset);
                 }, 5000);
             }
-            else if (!trade.reachedTarget1 &&
+            else if (!trade.reachedTarget1 && 
                     ((trade.direction === 'BULLISH' && currentPrice <= (trade.originalStop || trade.stop)) ||
                      (trade.direction === 'BEARISH' && currentPrice >= (trade.originalStop || trade.stop)))) {
                 const loss = Math.abs(currentPrice - entryAvg);
