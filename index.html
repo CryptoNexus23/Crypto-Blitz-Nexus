@@ -491,7 +491,14 @@
                 volatilityLevel,
                 sessionActive: getCurrentActiveSession(),
                 reachedTarget1: setup.reachedTarget1 || false,
-                reachedTarget2: setup.reachedTarget2 || false
+                reachedTarget2: setup.reachedTarget2 || false,
+                
+                // NEW: Detection function outputs for signal quality tracking
+                sessionActive: setup.sessionActive || '',
+                higherTFBias: setup.higherTFBias || '',
+                volatilityLevel: setup.volatilityLevel || '',
+                marketCondition: setup.marketCondition || '',
+                confluenceScore: setup.confluenceScore || ''
             };
 
             tradeDatabase.trades.push(trade);
@@ -706,16 +713,20 @@
             const momentum = calculateMomentum(asset);
             const sessionMultiplier = getSessionMultiplier();
             const patternScore = calculatePatternScore(asset, currentPrice);
-            let baseConfluence = 8 + Math.floor(Math.random() * 8);
-            baseConfluence += Math.floor(Math.abs(momentum) * 2);
-            baseConfluence += Math.floor(sessionMultiplier * 1.5);
-            baseConfluence += Math.floor(Math.abs(patternScore) * 2);
-            if (marketCondition === 'TRENDING_UP' && momentum > 0) baseConfluence += 2;
-            if (marketCondition === 'TRENDING_DOWN' && momentum < 0) baseConfluence += 2;
-            if (volatilityLevel === 'HIGH' || volatilityLevel === 'EXTREME') baseConfluence += 3;
+            
+            // NEW: Replace random confidence with detection functions
+            const session = detectSessionBias(Date.now());
+            const dir = detectDirectionBias(asset, marketCondition);
+            const vol = detectVolatilityLevel(priceHistory[asset] || []);
+            const trend = detectTrendCondition(priceHistory[asset] || []);
+            
+            const baseConfidence = 50;
+            const totalBoost = session.confidenceBoost + dir.confidenceBoost + vol.confidenceBoost + trend.confidenceBoost;
+            const finalConfidence = Math.min(Math.max(baseConfidence + totalBoost, 0), 100);
+            
             const minRequired = riskConfigs[riskMode].minConfidence;
-            if (baseConfluence >= minRequired && !activeTrades[asset]) {
-                generateAISetup(asset, currentPrice, baseConfluence, momentum);
+            if (finalConfidence >= minRequired && !activeTrades[asset]) {
+                generateAISetup(asset, currentPrice, finalConfidence, momentum, session, dir, vol, trend);
                 lastSignalTime[asset] = Date.now();
             }
         }
@@ -738,11 +749,11 @@
             return (probability - 50) / 50;
         }
 
-        function generateAISetup(asset, price, confidence, momentum) { /* unchanged */ 
+        function generateAISetup(asset, price, confidence, momentum, session, dir, vol, trend) { /* unchanged */ 
             const direction = momentum > 0 ? 'BULLISH' : 'BEARISH';
             const config = riskConfigs[riskMode];
             const setup = calculateSetupLevels(asset, price, direction, config);
-            setup.confidence = Math.min(confidence, 20);
+            setup.confidence = Math.min(confidence, 100);
             setup.direction = direction;
             setup.timestamp = Date.now();
             setup.probability = getPatternProbability({direction, confidence: setup.confidence, marketCondition, volatilityLevel});
@@ -750,10 +761,17 @@
             setup.status = 'ACTIVE';
             setup.reachedTarget1 = false;
             setup.reachedTarget2 = false;
+            
+            // NEW: Store detection results for tracking
+            setup.sessionActive = session.sessionName;
+            setup.higherTFBias = dir.directionBias;
+            setup.volatilityLevel = vol.volatilityLevel;
+            setup.marketCondition = trend.trendType;
+            setup.confluenceScore = confidence;
             activeTrades[asset] = setup;
             updateSetupDisplay(asset, setup);
             const directionIcon = direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️';
-            addTradeMessage(`🤖 AI SIGNAL: ${directionIcon} ${asset.toUpperCase()} ${direction} (${confidence}/20)`, 'AI');
+            addTradeMessage(`🤖 AI SIGNAL: ${directionIcon} ${asset.toUpperCase()} ${direction} (${confidence}/100)`, 'AI');
             addTradeMessage(`├─ Entry: $${Math.round(setup.entry.min).toLocaleString()}-${Math.round(setup.entry.max).toLocaleString()}`, 'AI');
             addTradeMessage(`├─ Stop: $${Math.round(setup.stop).toLocaleString()} | Targets: $${Math.round(setup.t1).toLocaleString()}/$${Math.round(setup.t2).toLocaleString()}`, 'AI');
             addTradeMessage(`└─ Success rate: ${setup.probability}% | Market: ${marketCondition}`, 'AI');
@@ -1212,6 +1230,76 @@
             else return 0.9;
         }
 
+        // ============================================
+        // DETECTION FUNCTIONS - PHASE 2 IMPLEMENTATION
+        // ============================================
+
+        function detectSessionBias(currentTime) {
+            const date = new Date(currentTime);
+            const hour = date.getUTCHours();
+            let sessionName = 'CLOSED', confidenceBoost = 0;
+            if (hour >= 21 || hour < 6) { sessionName = 'TOKYO'; confidenceBoost = 18; }
+            else if (hour >= 7 && hour < 16) { sessionName = 'LONDON'; confidenceBoost = 5; }
+            else if (hour >= 12 && hour < 21) { sessionName = 'NEW_YORK'; confidenceBoost = 5; }
+            else if (hour >= 22 || hour < 7) { sessionName = 'SYDNEY'; confidenceBoost = 2; }
+            return { sessionName, confidenceBoost };
+        }
+
+        function detectDirectionBias(asset, higherTimeframeTrend) {
+            let confidenceBoost = 0;
+            if (asset === 'BTC' && higherTimeframeTrend === 'BULLISH') confidenceBoost = 8;
+            else if (asset === 'ETH' && higherTimeframeTrend === 'BULLISH') confidenceBoost = 4;
+            else if (higherTimeframeTrend === 'BEARISH') confidenceBoost = 2;
+            else confidenceBoost = 0;
+            return { directionBias: higherTimeframeTrend, confidenceBoost };
+        }
+
+        function detectVolatilityLevel(priceHistory, lookbackPeriod = 20) {
+            if (!priceHistory || priceHistory.length < lookbackPeriod) {
+                return { volatilityLevel: 'NORMAL', atr: 0, confidenceBoost: 2 };
+            }
+            
+            let sum = 0;
+            for (let i = 1; i < Math.min(lookbackPeriod, priceHistory.length); i++) {
+                const currentPrice = priceHistory[i].price;
+                const prevPrice = priceHistory[i - 1].price;
+                const change = Math.abs(currentPrice - prevPrice);
+                sum += change;
+            }
+            
+            const atr = sum / (Math.min(lookbackPeriod, priceHistory.length) - 1);
+            const currentPrice = priceHistory[priceHistory.length - 1].price;
+            const atrPerc = 100 * (atr / currentPrice);
+            
+            let level = 'NORMAL', confidenceBoost = 2;
+            if (atrPerc > 1.2) { level = 'EXTREME'; confidenceBoost = 10; }
+            else if (atrPerc > 0.8) { level = 'HIGH'; confidenceBoost = 6; }
+            else if (atrPerc < 0.4) { level = 'LOW'; confidenceBoost = -5; }
+            
+            return { volatilityLevel: level, atr, confidenceBoost };
+        }
+
+        function detectTrendCondition(priceHistory, trendLookback = 50) {
+            if (!priceHistory || priceHistory.length < trendLookback) {
+                return { trendType: 'RANGING', confidenceBoost: 0 };
+            }
+            
+            let prices = [];
+            for (let i = 0; i < Math.min(trendLookback, priceHistory.length); i++) {
+                prices.push(priceHistory[i].price);
+            }
+            
+            const highestPrice = Math.max(...prices);
+            const lowestPrice = Math.min(...prices);
+            const recentPrice = priceHistory[priceHistory.length - 1].price;
+            
+            let trendType = 'RANGING', confidenceBoost = 0;
+            if (recentPrice < lowestPrice * 1.05) { trendType = 'TRENDING_DOWN'; confidenceBoost = 20; }
+            else if (recentPrice > highestPrice * 0.95) { trendType = 'TRENDING_UP'; confidenceBoost = 15; }
+            
+            return { trendType, confidenceBoost };
+        }
+
         function addTradeMessage(msg, sender) { /* unchanged */ 
             const feed = document.getElementById('feed');
             if (!feed) return;
@@ -1238,7 +1326,8 @@
             }
             const headers = [
                 'timestamp','asset','direction','entry_min','entry_max','stop','t1','t2',
-                'entryPrice','outcome','profit','marketCondition','volatilityLevel','sessionActive'
+                'entryPrice','outcome','profit','marketCondition','volatilityLevel','sessionActive',
+                'higherTFBias','confluenceScore'
             ];
             const escape = (v) => {
                 if (v === null || v === undefined) return '';
@@ -1263,7 +1352,9 @@
                     tr.profit ?? '',
                     tr.marketCondition || '',
                     tr.volatilityLevel || '',
-                    tr.sessionActive || ''
+                    tr.sessionActive || '',
+                    tr.higherTFBias || '',
+                    tr.confluenceScore || ''
                 ].map(escape).join(',');
             })).join('\n');
             const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -1286,4 +1377,4 @@
         });
     </script>
 </body>
-</html> 
+</html>
