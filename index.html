@@ -342,6 +342,15 @@
         const MIN_BTC_POSITION = 0.0001; // Minimum BTC units
         const MIN_ETH_POSITION = 0.01; // Minimum ETH units
 
+        // Swing point detection lookback periods per timeframe
+        const SWING_LOOKBACK = {
+            '1m': 10,
+            '5m': 5,
+            '15m': 3,
+            '1h': 3,
+            '4h': 2
+        };
+
         // Feature flags (Option C)
         const AUTO_TRADE_ENABLED = false; // set true when backend is running
         const AUTO_TRADE_URL = 'http://localhost:3001/auto-trade';
@@ -349,6 +358,27 @@
         let currentPrices = {btc: 0, eth: 0}, scanInterval = 3000;
         let persistentLevels = {btc: {ob: [], fvg: []}, eth: {ob: [], fvg: []}};
         let activeTrades = {btc: null, eth: null};
+        
+        // Order Block Detection Engine - Global State
+        let activeOrderBlocks = {
+            bullish: [],
+            bearish: [],
+            lastUpdate: null
+        };
+        
+        // Fair Value Gap Detection Engine - Global State
+        let activeFairValueGaps = {
+            bullish: [],
+            bearish: [],
+            lastUpdate: null
+        };
+        
+        // Market Structure Tracker - Global State
+        let currentMarketStructure = {
+            btc: null,
+            eth: null,
+            lastUpdate: null
+        };
         let riskMode = 'conservative', newsMode = false;
         let audioAlertActive = false, alertInterval = null;
         let lastSignalTime = {btc: 0, eth: 0};
@@ -491,14 +521,7 @@
                 volatilityLevel,
                 sessionActive: getCurrentActiveSession(),
                 reachedTarget1: setup.reachedTarget1 || false,
-                reachedTarget2: setup.reachedTarget2 || false,
-                
-                // NEW: Detection function outputs for signal quality tracking
-                sessionActive: setup.sessionActive || '',
-                higherTFBias: setup.higherTFBias || '',
-                volatilityLevel: setup.volatilityLevel || '',
-                marketCondition: setup.marketCondition || '',
-                confluenceScore: setup.confluenceScore || ''
+                reachedTarget2: setup.reachedTarget2 || false
             };
 
             tradeDatabase.trades.push(trade);
@@ -707,26 +730,66 @@
                 scanInterval < 4000 ? 'ACTIVE' : 'NORMAL';
         }
 
-        function scanForSignals(asset, currentPrice) { /* unchanged */ 
+        function scanForSignals(asset, currentPrice) {
+            // === ADVANCED SMC-POWERED SIGNAL GENERATION ===
             const timeSinceLastSignal = Date.now() - lastSignalTime[asset];
             if (timeSinceLastSignal < 60000) return;
-            const momentum = calculateMomentum(asset);
-            const sessionMultiplier = getSessionMultiplier();
-            const patternScore = calculatePatternScore(asset, currentPrice);
             
-            // NEW: Replace random confidence with detection functions
+            // Get recent candle data for SMC analysis
+            const recentCandles = getRecentCandles(asset, 50); // Last 50 candles
+            if (!recentCandles || recentCandles.length < 20) return;
+            
+            // === STEP 1: RUN ALL SMC DETECTION SYSTEMS ===
+            
+            // 1. Order Block Detection
+            const obResult = detectOrderBlocks(recentCandles, asset, '5m');
+            const bestOB = getBestOrderBlock(obResult, currentPrice);
+            
+            // 2. Fair Value Gap Detection  
+            const fvgResult = detectFairValueGaps(recentCandles, asset);
+            const bestFVG = getBestFairValueGap(fvgResult, currentPrice);
+            
+            // 3. Market Structure Analysis
+            const marketStructure = analyzeMarketStructure(recentCandles, '5m');
+            
+            // 4. Session Analysis (enhanced)
             const session = detectSessionBias(Date.now());
-            const dir = detectDirectionBias(asset, marketCondition);
-            const vol = detectVolatilityLevel(priceHistory[asset] || []);
-            const trend = detectTrendCondition(priceHistory[asset] || []);
             
-            const baseConfidence = 50;
-            const totalBoost = session.confidenceBoost + dir.confidenceBoost + vol.confidenceBoost + trend.confidenceBoost;
-            const finalConfidence = Math.min(Math.max(baseConfidence + totalBoost, 0), 100);
+            // 5. Volatility Analysis (enhanced)
+            const volatility = detectVolatilityLevel(recentCandles, 20);
             
+            // 6. Trend Analysis (enhanced)
+            const trend = detectTrendCondition(recentCandles, 50);
+            
+            // === STEP 2: CALCULATE CONFLUENCE SCORE ===
+            const setupData = {
+                orderBlock: bestOB,
+                fvg: bestFVG,
+                marketStructure: marketStructure,
+                setupDirection: calculateMomentum(asset) > 0 ? 'bullish' : 'bearish',
+                mtfAlignment: { aligned: 'htf_only' }, // Simplified for now
+                riskReward: 3.0 // Default R:R ratio
+            };
+            
+            const confluenceResult = calculateConfluenceScore(setupData);
+            
+            // === STEP 3: DECISION LOGIC ===
             const minRequired = riskConfigs[riskMode].minConfidence;
-            if (finalConfidence >= minRequired && !activeTrades[asset]) {
-                generateAISetup(asset, currentPrice, finalConfidence, momentum, session, dir, vol, trend);
+            const finalConfidence = confluenceResult.percentage; // Use confluence percentage as confidence
+            
+            if (confluenceResult.tradeable && finalConfidence >= minRequired && !activeTrades[asset]) {
+                // Store all detection results for tracking
+                const detectionResults = {
+                    session: session,
+                    volatility: volatility,
+                    trend: trend,
+                    marketStructure: marketStructure,
+                    orderBlock: bestOB,
+                    fvg: bestFVG,
+                    confluence: confluenceResult
+                };
+                
+                generateAISetup(asset, currentPrice, finalConfidence, calculateMomentum(asset), detectionResults);
                 lastSignalTime[asset] = Date.now();
             }
         }
@@ -749,11 +812,14 @@
             return (probability - 50) / 50;
         }
 
-        function generateAISetup(asset, price, confidence, momentum, session, dir, vol, trend) { /* unchanged */ 
+        function generateAISetup(asset, price, confidence, momentum, detectionResults = null) {
+            // === ENHANCED AI SETUP WITH SMC DETECTION RESULTS ===
             const direction = momentum > 0 ? 'BULLISH' : 'BEARISH';
             const config = riskConfigs[riskMode];
             const setup = calculateSetupLevels(asset, price, direction, config);
-            setup.confidence = Math.min(confidence, 100);
+            
+            // Store SMC detection results
+            setup.confidence = Math.min(confidence, 100); // Updated to 100 scale
             setup.direction = direction;
             setup.timestamp = Date.now();
             setup.probability = getPatternProbability({direction, confidence: setup.confidence, marketCondition, volatilityLevel});
@@ -762,19 +828,42 @@
             setup.reachedTarget1 = false;
             setup.reachedTarget2 = false;
             
-            // NEW: Store detection results for tracking
-            setup.sessionActive = session.sessionName;
-            setup.higherTFBias = dir.directionBias;
-            setup.volatilityLevel = vol.volatilityLevel;
-            setup.marketCondition = trend.trendType;
-            setup.confluenceScore = confidence;
+            // === STORE SMC DETECTION RESULTS FOR TRACKING ===
+            if (detectionResults) {
+                setup.sessionActive = detectionResults.session?.sessionName || '';
+                setup.higherTFBias = detectionResults.marketStructure?.trend || '';
+                setup.volatilityLevel = detectionResults.volatility?.volatilityLevel || '';
+                setup.marketCondition = detectionResults.trend?.trendType || '';
+                setup.confluenceScore = detectionResults.confluence?.percentage || 0;
+                
+                // Store detailed SMC data
+                setup.smcData = {
+                    orderBlock: detectionResults.orderBlock,
+                    fvg: detectionResults.fvg,
+                    marketStructure: detectionResults.marketStructure,
+                    confluence: detectionResults.confluence
+                };
+            }
+            
             activeTrades[asset] = setup;
             updateSetupDisplay(asset, setup);
+            
+            // Enhanced signal display with SMC information
             const directionIcon = direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️';
-            addTradeMessage(`🤖 AI SIGNAL: ${directionIcon} ${asset.toUpperCase()} ${direction} (${confidence}/100)`, 'AI');
+            const confluenceRating = detectionResults?.confluence?.qualityRating || 'UNKNOWN';
+            
+            addTradeMessage(`🤖 SMC SIGNAL: ${directionIcon} ${asset.toUpperCase()} ${direction} (${confidence}/100)`, 'AI');
+            addTradeMessage(`├─ Quality: ${confluenceRating} | Confluence: ${detectionResults?.confluence?.totalScore || 0}/${detectionResults?.confluence?.maxScore || 16}`, 'AI');
             addTradeMessage(`├─ Entry: $${Math.round(setup.entry.min).toLocaleString()}-${Math.round(setup.entry.max).toLocaleString()}`, 'AI');
             addTradeMessage(`├─ Stop: $${Math.round(setup.stop).toLocaleString()} | Targets: $${Math.round(setup.t1).toLocaleString()}/$${Math.round(setup.t2).toLocaleString()}`, 'AI');
+            
+            // Show SMC factors if available
+            if (detectionResults?.confluence?.factorsPresent?.length > 0) {
+                addTradeMessage(`├─ Factors: ${detectionResults.confluence.factorsPresent.join(', ')}`, 'AI');
+            }
+            
             addTradeMessage(`└─ Success rate: ${setup.probability}% | Market: ${marketCondition}`, 'AI');
+            
             playSignalAudio(confidence);
             const alertBtn = document.getElementById(`${asset}-alert`);
             if (alertBtn) {
@@ -1230,74 +1319,785 @@
             else return 0.9;
         }
 
-        // ============================================
-        // DETECTION FUNCTIONS - PHASE 2 IMPLEMENTATION
-        // ============================================
-
-        function detectSessionBias(currentTime) {
-            const date = new Date(currentTime);
-            const hour = date.getUTCHours();
-            let sessionName = 'CLOSED', confidenceBoost = 0;
-            if (hour >= 21 || hour < 6) { sessionName = 'TOKYO'; confidenceBoost = 18; }
-            else if (hour >= 7 && hour < 16) { sessionName = 'LONDON'; confidenceBoost = 5; }
-            else if (hour >= 12 && hour < 21) { sessionName = 'NEW_YORK'; confidenceBoost = 5; }
-            else if (hour >= 22 || hour < 7) { sessionName = 'SYDNEY'; confidenceBoost = 2; }
-            return { sessionName, confidenceBoost };
+        // === ATR CALCULATION FOR DYNAMIC THRESHOLDS ===
+        function calculateATR(candles, period = 14) {
+            // Input: candles array with {high, low, close} properties
+            // period: lookback period (default 14)
+            
+            // Step 1: Validate input
+            if (!candles || candles.length < period + 1) {
+                return null;  // Not enough data
+            }
+            
+            // Step 2: Calculate True Range for each candle
+            let trueRanges = [];
+            for (let i = 1; i < candles.length; i++) {
+                const high = candles[i].high;
+                const low = candles[i].low;
+                const prevClose = candles[i - 1].close;
+                
+                // True Range = max of:
+                // 1. Current high - current low
+                // 2. abs(current high - previous close)
+                // 3. abs(current low - previous close)
+                const tr = Math.max(
+                    high - low,
+                    Math.abs(high - prevClose),
+                    Math.abs(low - prevClose)
+                );
+                
+                trueRanges.push(tr);
+            }
+            
+            // Step 3: Calculate ATR (simple moving average of True Ranges)
+            const recentTRs = trueRanges.slice(-period);
+            const atr = recentTRs.reduce((sum, tr) => sum + tr, 0) / period;
+            
+            return atr;
         }
 
-        function detectDirectionBias(asset, higherTimeframeTrend) {
-            let confidenceBoost = 0;
-            if (asset === 'BTC' && higherTimeframeTrend === 'BULLISH') confidenceBoost = 8;
-            else if (asset === 'ETH' && higherTimeframeTrend === 'BULLISH') confidenceBoost = 4;
-            else if (higherTimeframeTrend === 'BEARISH') confidenceBoost = 2;
-            else confidenceBoost = 0;
-            return { directionBias: higherTimeframeTrend, confidenceBoost };
+        // === SWING POINT DETECTION FOR MARKET STRUCTURE ===
+        function findSwingHighs(candles, lookback = 5) {
+            // Identifies swing highs: candles where high is greater than 
+            // lookback candles on both sides
+            
+            if (!candles || candles.length < (lookback * 2 + 1)) {
+                return [];
+            }
+            
+            let swingHighs = [];
+            
+            // Start from lookback index, stop at length - lookback
+            for (let i = lookback; i < candles.length - lookback; i++) {
+                const currentHigh = candles[i].high;
+                let isSwingHigh = true;
+                
+                // Check lookback candles on left side
+                for (let j = i - lookback; j < i; j++) {
+                    if (candles[j].high >= currentHigh) {
+                        isSwingHigh = false;
+                        break;
+                    }
+                }
+                
+                // Check lookback candles on right side
+                if (isSwingHigh) {
+                    for (let j = i + 1; j <= i + lookback; j++) {
+                        if (candles[j].high >= currentHigh) {
+                            isSwingHigh = false;
+                            break;
+                        }
+                    }
+                }
+                
+                if (isSwingHigh) {
+                    swingHighs.push({
+                        price: currentHigh,
+                        index: i,
+                        timestamp: candles[i].timestamp || Date.now(),
+                        broken: false
+                    });
+                }
+            }
+            
+            return swingHighs;
         }
 
-        function detectVolatilityLevel(priceHistory, lookbackPeriod = 20) {
-            if (!priceHistory || priceHistory.length < lookbackPeriod) {
-                return { volatilityLevel: 'NORMAL', atr: 0, confidenceBoost: 2 };
+        function findSwingLows(candles, lookback = 5) {
+            // Identifies swing lows: candles where low is less than 
+            // lookback candles on both sides
+            
+            if (!candles || candles.length < (lookback * 2 + 1)) {
+                return [];
             }
             
-            let sum = 0;
-            for (let i = 1; i < Math.min(lookbackPeriod, priceHistory.length); i++) {
-                const currentPrice = priceHistory[i].price;
-                const prevPrice = priceHistory[i - 1].price;
-                const change = Math.abs(currentPrice - prevPrice);
-                sum += change;
+            let swingLows = [];
+            
+            for (let i = lookback; i < candles.length - lookback; i++) {
+                const currentLow = candles[i].low;
+                let isSwingLow = true;
+                
+                // Check lookback candles on left side
+                for (let j = i - lookback; j < i; j++) {
+                    if (candles[j].low <= currentLow) {
+                        isSwingLow = false;
+                        break;
+                    }
+                }
+                
+                // Check lookback candles on right side
+                if (isSwingLow) {
+                    for (let j = i + 1; j <= i + lookback; j++) {
+                        if (candles[j].low <= currentLow) {
+                            isSwingLow = false;
+                            break;
+                        }
+                    }
+                }
+                
+                if (isSwingLow) {
+                    swingLows.push({
+                        price: currentLow,
+                        index: i,
+                        timestamp: candles[i].timestamp || Date.now(),
+                        broken: false
+                    });
+                }
             }
             
-            const atr = sum / (Math.min(lookbackPeriod, priceHistory.length) - 1);
-            const currentPrice = priceHistory[priceHistory.length - 1].price;
-            const atrPerc = 100 * (atr / currentPrice);
-            
-            let level = 'NORMAL', confidenceBoost = 2;
-            if (atrPerc > 1.2) { level = 'EXTREME'; confidenceBoost = 10; }
-            else if (atrPerc > 0.8) { level = 'HIGH'; confidenceBoost = 6; }
-            else if (atrPerc < 0.4) { level = 'LOW'; confidenceBoost = -5; }
-            
-            return { volatilityLevel: level, atr, confidenceBoost };
+            return swingLows;
         }
 
-        function detectTrendCondition(priceHistory, trendLookback = 50) {
-            if (!priceHistory || priceHistory.length < trendLookback) {
-                return { trendType: 'RANGING', confidenceBoost: 0 };
+        // === ORDER BLOCK DETECTION ENGINE (CRYPTO-ADAPTED) ===
+        function detectOrderBlocks(candles, asset, currentTimeframe = '5m') {
+            // Detects institutional order blocks from price displacement
+            
+            if (!candles || candles.length < 20) {
+                return { bullishOBs: [], bearishOBs: [] };
             }
             
-            let prices = [];
-            for (let i = 0; i < Math.min(trendLookback, priceHistory.length); i++) {
-                prices.push(priceHistory[i].price);
+            const atr = calculateATR(candles, 14);
+            if (!atr) return { bullishOBs: [], bearishOBs: [] };
+            
+            // CRYPTO ADAPTATION: Use percentage-based displacement threshold
+            const avgPrice = candles[candles.length - 1].close;
+            const displacementThreshold = atr * 1.5;  // Dynamic, not fixed pips
+            
+            let bullishOBs = [];
+            let bearishOBs = [];
+            
+            // Scan last 50 candles for displacement events
+            const scanStart = Math.max(0, candles.length - 50);
+            
+            for (let i = scanStart; i < candles.length - 5; i++) {
+                // Calculate displacement over next 3-5 candles
+                let displacementSize = 0;
+                let displacementEnd = Math.min(i + 5, candles.length - 1);
+                
+                for (let j = i + 1; j <= displacementEnd; j++) {
+                    displacementSize += Math.abs(candles[j].close - candles[j - 1].close);
+                }
+                
+                // Check if displacement exceeds threshold
+                if (displacementSize < displacementThreshold) {
+                    continue;  // No significant displacement
+                }
+                
+                // Determine displacement direction
+                const startPrice = candles[i].close;
+                const endPrice = candles[displacementEnd].close;
+                const isBullishDisplacement = endPrice > startPrice;
+                
+                // Find last opposite candle before displacement
+                let oppositeCandle = null;
+                
+                if (isBullishDisplacement) {
+                    // Look for last bearish candle
+                    for (let j = i; j >= Math.max(0, i - 10); j--) {
+                        const isBearishCandle = candles[j].close < candles[j].open;
+                        const bodySize = Math.abs(candles[j].close - candles[j].open);
+                        const totalRange = candles[j].high - candles[j].low;
+                        const bodyRatio = bodySize / totalRange;
+                        
+                        // CRYPTO ADAPTATION: Require meaningful body (40% minimum)
+                        if (isBearishCandle && bodyRatio >= 0.4) {
+                            oppositeCandle = candles[j];
+                            oppositeCandle.index = j;
+                            break;
+                        }
+                    }
+                    
+                    if (oppositeCandle) {
+                        // Create bullish Order Block
+                        const ob = {
+                            id: `bull_ob_${Date.now()}_${i}`,
+                            type: 'bullish',
+                            high: oppositeCandle.high,
+                            low: oppositeCandle.low,
+                            timestamp: oppositeCandle.timestamp || Date.now(),
+                            candleIndex: oppositeCandle.index,
+                            displacementSize: displacementSize,
+                            qualityScore: 0,  // Will calculate next
+                            freshnessStatus: 'fresh',
+                            valid: true,
+                            testedCount: 0
+                        };
+                        
+                        // Calculate quality score (CRYPTO-ADAPTED: no volume factor)
+                        ob.qualityScore = calculateOBQuality(ob, candles, atr, currentTimeframe);
+                        
+                        bullishOBs.push(ob);
+                    }
+                    
+                } else {
+                    // Bearish displacement - look for last bullish candle
+                    for (let j = i; j >= Math.max(0, i - 10); j--) {
+                        const isBullishCandle = candles[j].close > candles[j].open;
+                        const bodySize = Math.abs(candles[j].close - candles[j].open);
+                        const totalRange = candles[j].high - candles[j].low;
+                        const bodyRatio = bodySize / totalRange;
+                        
+                        if (isBullishCandle && bodyRatio >= 0.4) {
+                            oppositeCandle = candles[j];
+                            oppositeCandle.index = j;
+                            break;
+                        }
+                    }
+                    
+                    if (oppositeCandle) {
+                        // Create bearish Order Block
+                        const ob = {
+                            id: `bear_ob_${Date.now()}_${i}`,
+                            type: 'bearish',
+                            high: oppositeCandle.high,
+                            low: oppositeCandle.low,
+                            timestamp: oppositeCandle.timestamp || Date.now(),
+                            candleIndex: oppositeCandle.index,
+                            displacementSize: displacementSize,
+                            qualityScore: 0,
+                            freshnessStatus: 'fresh',
+                            valid: true,
+                            testedCount: 0
+                        };
+                        
+                        ob.qualityScore = calculateOBQuality(ob, candles, atr, currentTimeframe);
+                        
+                        bearishOBs.push(ob);
+                    }
+                }
             }
             
-            const highestPrice = Math.max(...prices);
-            const lowestPrice = Math.min(...prices);
-            const recentPrice = priceHistory[priceHistory.length - 1].price;
+            return {
+                bullishOBs: bullishOBs,
+                bearishOBs: bearishOBs,
+                totalDetected: bullishOBs.length + bearishOBs.length
+            };
+        }
+
+        function calculateOBQuality(ob, candles, atr, timeframe) {
+            // CRYPTO-ADAPTED: Quality scoring WITHOUT volume
+            let score = 0;
             
-            let trendType = 'RANGING', confidenceBoost = 0;
-            if (recentPrice < lowestPrice * 1.05) { trendType = 'TRENDING_DOWN'; confidenceBoost = 20; }
-            else if (recentPrice > highestPrice * 0.95) { trendType = 'TRENDING_UP'; confidenceBoost = 15; }
+            // Factor 1: Freshness (30 points max)
+            if (ob.freshnessStatus === 'fresh') {
+                score += 30;
+            } else if (ob.testedCount === 1) {
+                score += 15;
+            } else {
+                score += 5;
+            }
             
-            return { trendType, confidenceBoost };
+            // Factor 2: Displacement Strength (40 points max - increased weight)
+            const avgCandleRange = atr;
+            const displacementRatio = ob.displacementSize / avgCandleRange;
+            
+            if (displacementRatio > 3.0) {
+                score += 40;
+            } else if (displacementRatio > 2.5) {
+                score += 30;
+            } else if (displacementRatio > 2.0) {
+                score += 20;
+            } else {
+                score += 10;
+            }
+            
+            // Factor 3: Session Timing (30 points max - CRYPTO ADAPTED)
+            // For crypto: prioritize high-volatility windows
+            const hour = new Date(ob.timestamp).getUTCHours();
+            
+            // Crypto high-volume periods (UTC):
+            // 13:30-16:00 (US market overlap)
+            // 00:00-02:00 (Asia open)
+            // 08:00-10:00 (Europe open)
+            
+            if ((hour >= 13 && hour <= 16) || 
+                (hour >= 0 && hour <= 2) || 
+                (hour >= 8 && hour <= 10)) {
+                score += 30;
+            } else {
+                score += 10;
+            }
+            
+            return Math.min(score, 100);  // Cap at 100
+        }
+
+        // === FAIR VALUE GAP (FVG) SCANNER (CRYPTO-ADAPTED) ===
+        function detectFairValueGaps(candles, asset) {
+            // Detects 3-candle price inefficiencies (gaps)
+            
+            if (!candles || candles.length < 10) {
+                return { bullishFVGs: [], bearishFVGs: [] };
+            }
+            
+            const atr = calculateATR(candles, 14);
+            if (!atr) return { bullishFVGs: [], bearishFVGs: [] };
+            
+            // CRYPTO ADAPTATION: Minimum gap size as percentage of ATR
+            const minGapSize = atr * 0.5;  // 50% of ATR minimum
+            
+            let bullishFVGs = [];
+            let bearishFVGs = [];
+            
+            // Scan last 30 candles for FVG patterns
+            const scanStart = Math.max(0, candles.length - 30);
+            
+            for (let i = scanStart + 1; i < candles.length - 1; i++) {
+                const candle1 = candles[i - 1];  // First candle
+                const candle2 = candles[i];      // Middle candle (displacement)
+                const candle3 = candles[i + 1];  // Third candle
+                
+                // BULLISH FVG CHECK
+                // Condition: candle1.high < candle3.low (gap exists)
+                if (candle1.high < candle3.low) {
+                    const gapSize = candle3.low - candle1.high;
+                    
+                    // Validate gap size
+                    if (gapSize >= minGapSize) {
+                        // Validate middle candle momentum
+                        const middleBody = Math.abs(candle2.close - candle2.open);
+                        const avgRange = atr;
+                        
+                        // CRYPTO ADAPTATION: Require 1.5x average range (not 2.5x)
+                        if (middleBody >= avgRange * 1.5) {
+                            // Check middle candle direction aligns
+                            const isMiddleBullish = candle2.close > candle2.open;
+                            
+                            if (isMiddleBullish) {
+                                const fvg = {
+                                    id: `bull_fvg_${Date.now()}_${i}`,
+                                    type: 'bullish',
+                                    top: candle3.low,
+                                    bottom: candle1.high,
+                                    size: gapSize,
+                                    middleCandleIndex: i,
+                                    timestamp: candle2.timestamp || Date.now(),
+                                    qualityScore: 0,
+                                    fillStatus: 'unfilled',
+                                    testCount: 0,
+                                    valid: true
+                                };
+                                
+                                fvg.qualityScore = calculateFVGQuality(fvg, candle2, atr);
+                                bullishFVGs.push(fvg);
+                            }
+                        }
+                    }
+                }
+                
+                // BEARISH FVG CHECK
+                // Condition: candle1.low > candle3.high (gap exists)
+                if (candle1.low > candle3.high) {
+                    const gapSize = candle1.low - candle3.high;
+                    
+                    if (gapSize >= minGapSize) {
+                        const middleBody = Math.abs(candle2.close - candle2.open);
+                        const avgRange = atr;
+                        
+                        if (middleBody >= avgRange * 1.5) {
+                            const isMiddleBearish = candle2.close < candle2.open;
+                            
+                            if (isMiddleBearish) {
+                                const fvg = {
+                                    id: `bear_fvg_${Date.now()}_${i}`,
+                                    type: 'bearish',
+                                    top: candle1.low,
+                                    bottom: candle3.high,
+                                    size: gapSize,
+                                    middleCandleIndex: i,
+                                    timestamp: candle2.timestamp || Date.now(),
+                                    qualityScore: 0,
+                                    fillStatus: 'unfilled',
+                                    testCount: 0,
+                                    valid: true
+                                };
+                                
+                                fvg.qualityScore = calculateFVGQuality(fvg, candle2, atr);
+                                bearishFVGs.push(fvg);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return {
+                bullishFVGs: bullishFVGs,
+                bearishFVGs: bearishFVGs,
+                totalDetected: bullishFVGs.length + bearishFVGs.length
+            };
+        }
+
+        function calculateFVGQuality(fvg, middleCandle, atr) {
+            // CRYPTO-ADAPTED: Quality scoring WITHOUT volume
+            let score = 0;
+            
+            // Factor 1: Gap Size Relative to ATR (40 points max)
+            const gapRatio = fvg.size / atr;
+            
+            if (gapRatio > 2.0) {
+                score += 40;
+            } else if (gapRatio > 1.5) {
+                score += 30;
+            } else if (gapRatio > 1.0) {
+                score += 20;
+            } else {
+                score += 10;
+            }
+            
+            // Factor 2: Middle Candle Momentum (40 points max)
+            const middleBody = Math.abs(middleCandle.close - middleCandle.open);
+            const momentumRatio = middleBody / atr;
+            
+            if (momentumRatio > 2.5) {
+                score += 40;
+            } else if (momentumRatio > 2.0) {
+                score += 30;
+            } else if (momentumRatio > 1.5) {
+                score += 20;
+            } else {
+                score += 10;
+            }
+            
+            // Factor 3: Session Timing (20 points max - CRYPTO ADAPTED)
+            const hour = new Date(fvg.timestamp).getUTCHours();
+            
+            if ((hour >= 13 && hour <= 16) || 
+                (hour >= 0 && hour <= 2) || 
+                (hour >= 8 && hour <= 10)) {
+                score += 20;
+            } else {
+                score += 5;
+            }
+            
+            return Math.min(score, 100);
+        }
+
+        // === MARKET STRUCTURE TRACKER (CRYPTO-ADAPTED) ===
+        function analyzeMarketStructure(candles, currentTimeframe = '5m') {
+            // Analyzes swing points to determine market structure and trend
+            
+            if (!candles || candles.length < 20) {
+                return {
+                    trend: 'neutral',
+                    strength: 0,
+                    recentSwingHigh: null,
+                    recentSwingLow: null,
+                    bosDetected: false,
+                    chochDetected: false
+                };
+            }
+            
+            // Get lookback period for this timeframe
+            const lookbackMap = {
+                '1m': 10,
+                '5m': 5,
+                '15m': 3,
+                '1h': 3,
+                '4h': 2
+            };
+            const lookback = lookbackMap[currentTimeframe] || 5;
+            
+            // Find swing points
+            const swingHighs = findSwingHighs(candles, lookback);
+            const swingLows = findSwingLows(candles, lookback);
+            
+            if (swingHighs.length < 2 || swingLows.length < 2) {
+                return {
+                    trend: 'neutral',
+                    strength: 0,
+                    recentSwingHigh: swingHighs[swingHighs.length - 1] || null,
+                    recentSwingLow: swingLows[swingLows.length - 1] || null,
+                    bosDetected: false,
+                    chochDetected: false
+                };
+            }
+            
+            // Get most recent swing points
+            const recentHighs = swingHighs.slice(-3);  // Last 3 swing highs
+            const recentLows = swingLows.slice(-3);    // Last 3 swing lows
+            
+            // Determine trend based on Higher Highs/Higher Lows or Lower Highs/Lower Lows
+            let higherHighs = 0;
+            let higherLows = 0;
+            let lowerHighs = 0;
+            let lowerLows = 0;
+            
+            // Check swing highs progression
+            for (let i = 1; i < recentHighs.length; i++) {
+                if (recentHighs[i].price > recentHighs[i - 1].price) {
+                    higherHighs++;
+                } else {
+                    lowerHighs++;
+                }
+            }
+            
+            // Check swing lows progression
+            for (let i = 1; i < recentLows.length; i++) {
+                if (recentLows[i].price > recentLows[i - 1].price) {
+                    higherLows++;
+                } else {
+                    lowerLows++;
+                }
+            }
+            
+            // Determine trend
+            let trend = 'neutral';
+            let strength = 0;
+            
+            if (higherHighs >= 1 && higherLows >= 1) {
+                trend = 'bullish';
+                strength = ((higherHighs + higherLows) / (recentHighs.length + recentLows.length - 2)) * 100;
+            } else if (lowerHighs >= 1 && lowerLows >= 1) {
+                trend = 'bearish';
+                strength = ((lowerHighs + lowerLows) / (recentHighs.length + recentLows.length - 2)) * 100;
+            }
+            
+            // Detect Break of Structure (BoS)
+            const currentPrice = candles[candles.length - 1].close;
+            const mostRecentHigh = swingHighs[swingHighs.length - 1];
+            const mostRecentLow = swingLows[swingLows.length - 1];
+            
+            let bosDetected = false;
+            let bosType = null;
+            
+            // Bullish BoS: Price breaks above recent swing high
+            if (mostRecentHigh && currentPrice > mostRecentHigh.price) {
+                bosDetected = true;
+                bosType = 'bullish_bos';
+            }
+            
+            // Bearish BoS: Price breaks below recent swing low
+            if (mostRecentLow && currentPrice < mostRecentLow.price) {
+                bosDetected = true;
+                bosType = 'bearish_bos';
+            }
+            
+            // Detect Change of Character (CHoCH) - simplified for crypto
+            let chochDetected = false;
+            
+            // CHoCH = break of internal structure opposite to trend
+            if (trend === 'bullish' && mostRecentLow && currentPrice < mostRecentLow.price) {
+                chochDetected = true;
+            } else if (trend === 'bearish' && mostRecentHigh && currentPrice > mostRecentHigh.price) {
+                chochDetected = true;
+            }
+            
+            return {
+                trend: trend,
+                strength: Math.round(strength),
+                recentSwingHigh: mostRecentHigh,
+                recentSwingLow: mostRecentLow,
+                bosDetected: bosDetected,
+                bosType: bosType,
+                chochDetected: chochDetected,
+                higherHighs: higherHighs,
+                higherLows: higherLows,
+                lowerHighs: lowerHighs,
+                lowerLows: lowerLows
+            };
+        }
+
+        // === CONFLUENCE SCORING MATRIX (CRYPTO-ADAPTED) ===
+        function calculateConfluenceScore(setupData) {
+            // Scores trade setup quality by evaluating multiple factors
+            // CRYPTO VERSION: No volume, no DXY, adapted factors
+            
+            let score = 0;
+            let maxScore = 16;  // Reduced from 20 (removed volume + DXY)
+            let factors = [];
+            
+            // Factor 1: Order Block Presence (3 points max - increased weight)
+            if (setupData.orderBlock) {
+                if (setupData.orderBlock.qualityScore >= 70) {
+                    score += 3;
+                    factors.push('High Quality OB');
+                } else if (setupData.orderBlock.qualityScore >= 50) {
+                    score += 2;
+                    factors.push('OB Present');
+                } else {
+                    score += 1;
+                    factors.push('Weak OB');
+                }
+            }
+            
+            // Factor 2: Fair Value Gap (3 points max - increased weight)
+            if (setupData.fvg) {
+                if (setupData.fvg.qualityScore >= 60) {
+                    score += 3;
+                    factors.push('Quality FVG');
+                } else if (setupData.fvg.qualityScore >= 40) {
+                    score += 2;
+                    factors.push('FVG Present');
+                } else {
+                    score += 1;
+                    factors.push('Weak FVG');
+                }
+            }
+            
+            // Factor 3: Market Structure Alignment (3 points max)
+            if (setupData.marketStructure) {
+                const structureAligned = setupData.marketStructure.trend === setupData.setupDirection;
+                
+                if (structureAligned) {
+                    score += 2;
+                    factors.push('Structure Aligned');
+                    
+                    // Bonus for recent BoS
+                    if (setupData.marketStructure.bosDetected && 
+                        setupData.marketStructure.bosType?.includes(setupData.setupDirection)) {
+                        score += 1;
+                        factors.push('Recent BoS');
+                    }
+                }
+            }
+            
+            // Factor 4: Session Timing (2 points max - CRYPTO ADAPTED)
+            // High-volatility crypto windows
+            const hour = new Date().getUTCHours();
+            if ((hour >= 13 && hour <= 16) ||  // US market overlap
+                (hour >= 0 && hour <= 2) ||    // Asia open
+                (hour >= 8 && hour <= 10)) {   // Europe open
+                score += 2;
+                factors.push('Prime Volatility Window');
+            } else if ((hour >= 11 && hour <= 13) || (hour >= 17 && hour <= 20)) {
+                score += 1;
+                factors.push('Active Period');
+            }
+            
+            // Factor 5: Multi-Timeframe Alignment (3 points max)
+            if (setupData.mtfAlignment) {
+                if (setupData.mtfAlignment.aligned === 'perfect') {
+                    score += 3;
+                    factors.push('MTF Perfect Alignment');
+                } else if (setupData.mtfAlignment.aligned === 'partial') {
+                    score += 2;
+                    factors.push('MTF Partial');
+                } else if (setupData.mtfAlignment.aligned === 'htf_only') {
+                    score += 1;
+                    factors.push('HTF Aligned');
+                }
+            }
+            
+            // Factor 6: Risk-Reward Ratio (2 points max)
+            if (setupData.riskReward) {
+                if (setupData.riskReward >= 4.0) {
+                    score += 2;
+                    factors.push('4:1+ R:R');
+                } else if (setupData.riskReward >= 3.0) {
+                    score += 1;
+                    factors.push('3:1 R:R');
+                }
+            }
+            
+            // Determine quality rating
+            let quality = '';
+            let positionSizeMultiplier = 0;
+            let tradeable = false;
+            
+            if (score >= 14) {
+                quality = 'EXCEPTIONAL';
+                positionSizeMultiplier = 1.25;
+                tradeable = true;
+            } else if (score >= 12) {
+                quality = 'EXCELLENT';
+                positionSizeMultiplier = 1.0;
+                tradeable = true;
+            } else if (score >= 10) {
+                quality = 'VERY GOOD';
+                positionSizeMultiplier = 0.75;
+                tradeable = true;
+            } else if (score >= 8) {
+                quality = 'GOOD';
+                positionSizeMultiplier = 0.5;
+                tradeable = true;
+            } else {
+                quality = 'INSUFFICIENT';
+                positionSizeMultiplier = 0;
+                tradeable = false;
+            }
+            
+            return {
+                totalScore: score,
+                maxScore: maxScore,
+                percentage: Math.round((score / maxScore) * 100),
+                qualityRating: quality,
+                factorsPresent: factors,
+                positionSizeMultiplier: positionSizeMultiplier,
+                tradeable: tradeable,
+                timestamp: Date.now()
+            };
+        }
+
+        // === HELPER FUNCTIONS FOR SMC INTEGRATION ===
+        function getRecentCandles(asset, count) {
+            // Convert priceHistory to candle format for SMC analysis
+            if (!priceHistory[asset] || priceHistory[asset].length < count) {
+                return null;
+            }
+            
+            const recentPrices = priceHistory[asset].slice(-count);
+            const candles = [];
+            
+            for (let i = 0; i < recentPrices.length; i++) {
+                const price = recentPrices[i].price;
+                const change = recentPrices[i].change || 0;
+                
+                // Create synthetic candle data from price history
+                candles.push({
+                    open: price - change,
+                    high: price + Math.abs(change) * 0.5,
+                    low: price - Math.abs(change) * 0.5,
+                    close: price,
+                    timestamp: recentPrices[i].time || Date.now()
+                });
+            }
+            
+            return candles;
+        }
+
+        function getBestOrderBlock(obResult, currentPrice) {
+            // Find the most relevant Order Block for current price
+            if (!obResult || (!obResult.bullishOBs.length && !obResult.bearishOBs.length)) {
+                return null;
+            }
+            
+            let allOBs = [...obResult.bullishOBs, ...obResult.bearishOBs];
+            
+            // Sort by quality score and proximity to current price
+            allOBs.sort((a, b) => {
+                const aDistance = Math.abs(currentPrice - ((a.high + a.low) / 2));
+                const bDistance = Math.abs(currentPrice - ((b.high + b.low) / 2));
+                
+                // Prioritize higher quality and closer proximity
+                const aScore = a.qualityScore - (aDistance / currentPrice) * 100;
+                const bScore = b.qualityScore - (bDistance / currentPrice) * 100;
+                
+                return bScore - aScore;
+            });
+            
+            return allOBs[0] || null;
+        }
+
+        function getBestFairValueGap(fvgResult, currentPrice) {
+            // Find the most relevant Fair Value Gap for current price
+            if (!fvgResult || (!fvgResult.bullishFVGs.length && !fvgResult.bearishFVGs.length)) {
+                return null;
+            }
+            
+            let allFVGs = [...fvgResult.bullishFVGs, ...fvgResult.bearishFVGs];
+            
+            // Sort by quality score and proximity to current price
+            allFVGs.sort((a, b) => {
+                const aDistance = Math.abs(currentPrice - ((a.top + a.bottom) / 2));
+                const bDistance = Math.abs(currentPrice - ((b.top + b.bottom) / 2));
+                
+                // Prioritize higher quality and closer proximity
+                const aScore = a.qualityScore - (aDistance / currentPrice) * 100;
+                const bScore = b.qualityScore - (bDistance / currentPrice) * 100;
+                
+                return bScore - aScore;
+            });
+            
+            return allFVGs[0] || null;
         }
 
         function addTradeMessage(msg, sender) { /* unchanged */ 
@@ -1327,7 +2127,9 @@
             const headers = [
                 'timestamp','asset','direction','entry_min','entry_max','stop','t1','t2',
                 'entryPrice','outcome','profit','marketCondition','volatilityLevel','sessionActive',
-                'higherTFBias','confluenceScore'
+                'higherTFBias','confluenceScore','obDetected','obLevel','obStrength','obQuality',
+                'fvgDetected','fvgTop','fvgBottom','fvgQuality','marketStructureTrend','bosDetected',
+                'chochDetected','confluenceRating','confluenceFactors'
             ];
             const escape = (v) => {
                 if (v === null || v === undefined) return '';
@@ -1338,6 +2140,8 @@
                 headers.join(',')
             ].concat(rows.map(tr => {
                 const s = tr.setup || {};
+                const smcData = s.smcData || {};
+                
                 return [
                     tr.timestamp,
                     tr.asset || '',
@@ -1353,8 +2157,21 @@
                     tr.marketCondition || '',
                     tr.volatilityLevel || '',
                     tr.sessionActive || '',
-                    tr.higherTFBias || '',
-                    tr.confluenceScore || ''
+                    s.higherTFBias || '',
+                    s.confluenceScore || '',
+                    smcData.orderBlock ? 'YES' : 'NO',
+                    smcData.orderBlock ? `${smcData.orderBlock.low}-${smcData.orderBlock.high}` : '',
+                    smcData.orderBlock ? (smcData.orderBlock.qualityScore >= 70 ? 'HIGH' : smcData.orderBlock.qualityScore >= 50 ? 'MEDIUM' : 'LOW') : '',
+                    smcData.orderBlock ? smcData.orderBlock.qualityScore : '',
+                    smcData.fvg ? 'YES' : 'NO',
+                    smcData.fvg ? smcData.fvg.top : '',
+                    smcData.fvg ? smcData.fvg.bottom : '',
+                    smcData.fvg ? (smcData.fvg.qualityScore >= 60 ? 'HIGH' : smcData.fvg.qualityScore >= 40 ? 'MEDIUM' : 'LOW') : '',
+                    smcData.marketStructure ? smcData.marketStructure.trend : '',
+                    smcData.marketStructure ? smcData.marketStructure.bosDetected : false,
+                    smcData.marketStructure ? smcData.marketStructure.chochDetected : false,
+                    smcData.confluence ? smcData.confluence.qualityRating : '',
+                    smcData.confluence ? smcData.confluence.factorsPresent.join(';') : ''
                 ].map(escape).join(',');
             })).join('\n');
             const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
