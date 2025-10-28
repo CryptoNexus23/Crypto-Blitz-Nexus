@@ -742,6 +742,11 @@
             let smcSignal = null;
             if (recentCandles && recentCandles.length >= 20) {
                 try {
+                    console.log(`[${asset}] SMC Detection Starting:`, {
+                        candleCount: recentCandles?.length,
+                        currentPrice: currentPrice
+                    });
+                    
                     // Run all SMC detection systems
                     const obResult = detectOrderBlocks(recentCandles, asset, '5m');
                     const bestOB = getBestOrderBlock(obResult, currentPrice);
@@ -766,9 +771,26 @@
                     
                     const confluenceResult = calculateConfluenceScore(setupData);
                     
+                    console.log(`[${asset}] Confluence Result:`, {
+                        score: confluenceResult.totalScore,
+                        maxScore: confluenceResult.maxScore,
+                        percentage: confluenceResult.percentage,
+                        tradeable: confluenceResult.tradeable,
+                        quality: confluenceResult.qualityRating,
+                        factors: confluenceResult.factorsPresent
+                    });
+                    
                     // Check if SMC signal is tradeable
-                    const minRequired = riskConfigs[riskMode].minConfidence;
+                    const minRequired = 25; // Fixed 25% minimum for crypto
                     const finalConfidence = confluenceResult.percentage;
+                    
+                    console.log(`[${asset}] Decision Check:`, {
+                        confluenceTradeable: confluenceResult.tradeable,
+                        finalConfidence: finalConfidence,
+                        minRequired: minRequired,
+                        hasActiveTrade: !!activeTrades[asset],
+                        willTrade: confluenceResult.tradeable && finalConfidence >= minRequired && !activeTrades[asset]
+                    });
                     
                     if (confluenceResult.tradeable && finalConfidence >= minRequired) {
                         smcSignal = {
@@ -791,6 +813,8 @@
             
             // === STEP 2: FALLBACK TO BASIC DETECTION ===
             if (!smcSignal) {
+                console.log(`[${asset}] Using fallback detection - SMC failed`);
+                
                 // Use basic detection as fallback
                 const session = detectSessionBias(Date.now());
                 const dir = detectDirectionBias(asset, marketCondition);
@@ -809,7 +833,14 @@
                 if (marketCondition === 'TRENDING_DOWN' && calculateMomentum(asset) < 0) baseConfluence += 2;
                 if (volatilityLevel === 'HIGH' || volatilityLevel === 'EXTREME') baseConfluence += 3;
                 
-                const minRequired = riskConfigs[riskMode].minConfidence;
+                const minRequired = 25; // Fixed 25% minimum for crypto
+                
+                console.log(`[${asset}] Fallback Decision Check:`, {
+                    baseConfluence: baseConfluence,
+                    minRequired: minRequired,
+                    hasActiveTrade: !!activeTrades[asset],
+                    willTrade: baseConfluence >= minRequired && !activeTrades[asset]
+                });
                 
                 if (baseConfluence >= minRequired) {
                     smcSignal = {
@@ -833,8 +864,17 @@
             
             // === STEP 3: GENERATE SIGNAL IF AVAILABLE ===
             if (smcSignal && !activeTrades[asset]) {
+                console.log(`[${asset}] 🚀 GENERATING SIGNAL!`, {
+                    confidence: smcSignal.confidence,
+                    quality: smcSignal.detectionResults.confluence?.qualityRating || 'BASIC'
+                });
                 generateAISetup(asset, currentPrice, smcSignal.confidence, calculateMomentum(asset), smcSignal.detectionResults);
                 lastSignalTime[asset] = Date.now();
+            } else {
+                console.log(`[${asset}] ❌ No signal generated:`, {
+                    hasSignal: !!smcSignal,
+                    hasActiveTrade: !!activeTrades[asset]
+                });
             }
         }
 
@@ -2037,21 +2077,25 @@
             let positionSizeMultiplier = 0;
             let tradeable = false;
             
-            if (score >= 14) {
+            if (score >= 12) {
                 quality = 'EXCEPTIONAL';
                 positionSizeMultiplier = 1.25;
                 tradeable = true;
-            } else if (score >= 12) {
+            } else if (score >= 10) {
                 quality = 'EXCELLENT';
                 positionSizeMultiplier = 1.0;
                 tradeable = true;
-            } else if (score >= 10) {
+            } else if (score >= 8) {
                 quality = 'VERY GOOD';
                 positionSizeMultiplier = 0.75;
                 tradeable = true;
-            } else if (score >= 8) {
+            } else if (score >= 6) {
                 quality = 'GOOD';
                 positionSizeMultiplier = 0.5;
+                tradeable = true;
+            } else if (score >= 4) {
+                quality = 'ACCEPTABLE';
+                positionSizeMultiplier = 0.25;
                 tradeable = true;
             } else {
                 quality = 'INSUFFICIENT';
