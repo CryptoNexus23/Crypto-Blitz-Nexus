@@ -521,7 +521,29 @@
                 volatilityLevel,
                 sessionActive: getCurrentActiveSession(),
                 reachedTarget1: setup.reachedTarget1 || false,
-                reachedTarget2: setup.reachedTarget2 || false
+                reachedTarget2: setup.reachedTarget2 || false,
+                
+                // SMC Learning Data (from setup.smcData)
+                sessionActive: setup.sessionActive || '',
+                higherTFBias: setup.higherTFBias || '',
+                volatilityLevel: setup.volatilityLevel || '',
+                marketCondition: setup.marketCondition || '',
+                confluenceScore: setup.confluenceScore || 0,
+                confluenceRating: setup.confluenceRating || 'UNKNOWN',
+                
+                // Detailed SMC Pattern Data
+                obDetected: setup.smcData?.orderBlock ? true : false,
+                obLevel: setup.smcData?.orderBlock?.high || null,
+                obStrength: setup.smcData?.orderBlock?.qualityScore >= 70 ? 'STRONG' : 
+                           setup.smcData?.orderBlock?.qualityScore >= 50 ? 'MEDIUM' : 'WEAK',
+                fvgDetected: setup.smcData?.fvg ? true : false,
+                fvgTop: setup.smcData?.fvg?.top || null,
+                fvgBottom: setup.smcData?.fvg?.bottom || null,
+                fvgQuality: setup.smcData?.fvg?.qualityScore >= 60 ? 'HIGH' : 
+                           setup.smcData?.fvg?.qualityScore >= 40 ? 'MEDIUM' : 'LOW',
+                confluenceFactors: setup.smcData?.confluence?.factorsPresent || [],
+                confluenceCount: setup.smcData?.confluence?.factorsPresent?.length || 0,
+                signalQuality: setup.confluenceRating || 'UNKNOWN'
             };
 
             tradeDatabase.trades.push(trade);
@@ -809,56 +831,45 @@
                 }
             }
             
-            // === STEP 2: ORIGINAL SIGNAL GENERATION WITH SMC LEARNING ===
-            // Use original signal generation logic for consistent trade frequency
-            const session = smcData?.session || detectSessionBias(Date.now());
-            const dir = detectDirectionBias(asset, marketCondition);
-            const vol = smcData?.volatility || detectVolatilityLevel(priceHistory[asset] || [], 20);
-            const trend = smcData?.trend || detectTrendCondition(priceHistory[asset] || [], 50);
-            
-            // Original confidence calculation (restored for learning)
-            let baseConfluence = 8 + Math.floor(Math.random() * 8);
-            baseConfluence += Math.floor(Math.abs(calculateMomentum(asset)) * 2);
-            baseConfluence += Math.floor(session.confidenceBoost * 0.1);
-            baseConfluence += Math.floor(dir.confidenceBoost * 0.1);
-            baseConfluence += Math.floor(vol.confidenceBoost * 0.1);
-            baseConfluence += Math.floor(trend.confidenceBoost * 0.1);
-            
-            if (marketCondition === 'TRENDING_UP' && calculateMomentum(asset) > 0) baseConfluence += 2;
-            if (marketCondition === 'TRENDING_DOWN' && calculateMomentum(asset) < 0) baseConfluence += 2;
-            if (volatilityLevel === 'HIGH' || volatilityLevel === 'EXTREME') baseConfluence += 3;
-            
-            const minRequired = riskConfigs[riskMode].minConfidence; // Use original risk configs
-            
-            console.log(`[${asset}] Signal Generation Check:`, {
-                baseConfluence: baseConfluence,
-                minRequired: minRequired,
-                hasActiveTrade: !!activeTrades[asset],
-                willTrade: baseConfluence >= minRequired && !activeTrades[asset],
-                smcDataAvailable: !!smcData
-            });
-            
-            if (baseConfluence >= minRequired && !activeTrades[asset]) {
-                // Generate signal with SMC data for learning
-                const signalData = {
-                    confidence: baseConfluence,
-                    detectionResults: smcData || {
-                        session: session,
-                        volatility: vol,
-                        trend: trend,
-                        marketStructure: null,
-                        orderBlock: null,
-                        fvg: null,
-                        confluence: {
-                            qualityRating: 'BASIC',
-                            totalScore: baseConfluence,
-                            factorsPresent: ['Basic Detection']
-                        }
-                    }
-                };
-                
-                generateAISetup(asset, currentPrice, signalData.confidence, calculateMomentum(asset), signalData.detectionResults);
-                lastSignalTime[asset] = Date.now();
+            // === STEP 2: SMC-BASED SIGNAL GENERATION ===
+            // Use SMC confluence to control entries (no more random signals)
+            if (smcData && smcData.confluence && !activeTrades[asset]) {
+                // Only take trades when confluence quality is tradeable
+                if (smcData.confluence.tradeable === true) {
+                    const signalConfidence = smcData.confluence.totalScore;
+                    
+                    console.log(`[${asset}] 🚀 SMC Signal Generated:`, {
+                        confluenceScore: signalConfidence,
+                        maxScore: smcData.confluence.maxScore,
+                        qualityRating: smcData.confluence.qualityRating,
+                        factors: smcData.confluence.factorsPresent,
+                        tradeable: smcData.confluence.tradeable
+                    });
+                    
+                    // Generate setup using SMC confidence (not random)
+                    generateAISetup(
+                        asset, 
+                        currentPrice, 
+                        signalConfidence,  // Use SMC score (0-16)
+                        calculateMomentum(asset),
+                        smcData  // Pass full SMC data
+                    );
+                    
+                    lastSignalTime[asset] = Date.now();
+                } else {
+                    // Log rejected setups for analysis
+                    console.log(`[${asset}] ❌ Setup Rejected:`, {
+                        confluenceScore: smcData.confluence.totalScore,
+                        maxScore: smcData.confluence.maxScore,
+                        qualityRating: smcData.confluence.qualityRating,
+                        factors: smcData.confluence.factorsPresent,
+                        tradeable: smcData.confluence.tradeable
+                    });
+                }
+            } else if (!smcData) {
+                console.log(`[${asset}] ⚠️ No SMC data available - skipping signal generation`);
+            } else if (activeTrades[asset]) {
+                console.log(`[${asset}] ⚠️ Active trade exists - skipping signal generation`);
             }
         }
 
@@ -880,14 +891,14 @@
             return (probability - 50) / 50;
         }
 
-        function generateAISetup(asset, price, confidence, momentum, detectionResults = null) {
-            // === ENHANCED AI SETUP WITH SMC DETECTION RESULTS ===
+        function generateAISetup(asset, price, confidence, momentum, smcData = null) {
+            // === SMC-BASED AI SETUP GENERATION ===
             const direction = momentum > 0 ? 'BULLISH' : 'BEARISH';
             const config = riskConfigs[riskMode];
             const setup = calculateSetupLevels(asset, price, direction, config);
             
-            // Store SMC detection results
-            setup.confidence = Math.min(confidence, 20); // Keep original 0-20 scale
+            // Use SMC confidence (0-16 scale) instead of random (0-20 scale)
+            setup.confidence = smcData ? smcData.confluence.totalScore : confidence;
             setup.direction = direction;
             setup.timestamp = Date.now();
             setup.probability = getPatternProbability({direction, confidence: setup.confidence, marketCondition, volatilityLevel});
@@ -897,20 +908,16 @@
             setup.reachedTarget2 = false;
             
             // === STORE SMC DETECTION RESULTS FOR TRACKING ===
-            if (detectionResults) {
-                setup.sessionActive = detectionResults.session?.sessionName || '';
-                setup.higherTFBias = detectionResults.marketStructure?.trend || '';
-                setup.volatilityLevel = detectionResults.volatility?.volatilityLevel || '';
-                setup.marketCondition = detectionResults.trend?.trendType || '';
-                setup.confluenceScore = detectionResults.confluence?.percentage || 0;
+            if (smcData) {
+                setup.sessionActive = smcData.session?.sessionName || '';
+                setup.higherTFBias = smcData.marketStructure?.trend || '';
+                setup.volatilityLevel = smcData.volatility?.volatilityLevel || '';
+                setup.marketCondition = smcData.trend?.trendType || '';
+                setup.confluenceScore = smcData.confluence?.totalScore || 0;
+                setup.confluenceRating = smcData.confluence?.qualityRating || 'UNKNOWN';
                 
                 // Store detailed SMC data
-                setup.smcData = {
-                    orderBlock: detectionResults.orderBlock,
-                    fvg: detectionResults.fvg,
-                    marketStructure: detectionResults.marketStructure,
-                    confluence: detectionResults.confluence
-                };
+                setup.smcData = smcData;
             }
             
             activeTrades[asset] = setup;
@@ -918,21 +925,23 @@
             
             // Enhanced signal display with SMC information
             const directionIcon = direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️';
-            const confluenceRating = detectionResults?.confluence?.qualityRating || 'UNKNOWN';
+            const confluenceRating = smcData?.confluence?.qualityRating || 'UNKNOWN';
+            const confluenceScore = smcData?.confluence?.totalScore || 0;
+            const maxScore = smcData?.confluence?.maxScore || 16;
             
-            addTradeMessage(`🤖 SMC SIGNAL: ${directionIcon} ${asset.toUpperCase()} ${direction} (${confidence}/20)`, 'AI');
-            addTradeMessage(`├─ Quality: ${confluenceRating} | Confluence: ${detectionResults?.confluence?.totalScore || 0}/${detectionResults?.confluence?.maxScore || 16}`, 'AI');
+            addTradeMessage(`🤖 SMC SIGNAL: ${directionIcon} ${asset.toUpperCase()} ${direction} (${confluenceScore}/${maxScore})`, 'AI');
+            addTradeMessage(`├─ Quality: ${confluenceRating} | Confluence: ${confluenceScore}/${maxScore}`, 'AI');
             addTradeMessage(`├─ Entry: $${Math.round(setup.entry.min).toLocaleString()}-${Math.round(setup.entry.max).toLocaleString()}`, 'AI');
             addTradeMessage(`├─ Stop: $${Math.round(setup.stop).toLocaleString()} | Targets: $${Math.round(setup.t1).toLocaleString()}/$${Math.round(setup.t2).toLocaleString()}`, 'AI');
             
             // Show SMC factors if available
-            if (detectionResults?.confluence?.factorsPresent?.length > 0) {
-                addTradeMessage(`├─ Factors: ${detectionResults.confluence.factorsPresent.join(', ')}`, 'AI');
+            if (smcData?.confluence?.factorsPresent?.length > 0) {
+                addTradeMessage(`├─ Factors: ${smcData.confluence.factorsPresent.join(', ')}`, 'AI');
             }
             
             addTradeMessage(`└─ Success rate: ${setup.probability}% | Market: ${marketCondition}`, 'AI');
             
-            playSignalAudio(confidence);
+            playSignalAudio(confluenceScore);
             const alertBtn = document.getElementById(`${asset}-alert`);
             if (alertBtn) {
                 alertBtn.classList.add('pulsing');
