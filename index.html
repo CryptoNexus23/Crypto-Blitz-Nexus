@@ -489,6 +489,12 @@
         // FIX #1 & #2: CORRECTED Win Rate + Position Sizing
         // ============================================
         function recordTradeOutcome(asset, setup, outcome, profit) {
+            // BUG FIX #1: Prevent duplicate recording
+            if (setup.recorded) {
+                console.log(`[${asset}] Trade already recorded - skipping duplicate`);
+                return;
+            }
+            
             // CRITICAL FIX #2: Calculate position size based on $10 risk
             const stopDistance = Math.abs(setup.entryPrice - setup.stop);
             
@@ -499,11 +505,14 @@
             const minPosition = asset === 'btc' ? MIN_BTC_POSITION : (asset === 'eth' ? MIN_ETH_POSITION : 0.01);
             positionSize = Math.max(positionSize, minPosition);
 
-            // Calculate actual P&L in dollars
+            // BUG FIX #2: Calculate actual P&L based on percentage moves
             let realizedPnL = 0;
             if (outcome === 'WIN') {
-                const targetProfit = Math.abs(setup.t2 - setup.entryPrice);
-                realizedPnL = positionSize * targetProfit;
+                // Calculate profit based on percentage moves (not absolute prices)
+                const stopDistancePercent = Math.abs((setup.stop - setup.entryPrice) / setup.entryPrice);
+                const targetDistancePercent = Math.abs((setup.t2 - setup.entryPrice) / setup.entryPrice);
+                const positionValueAtRisk = RISK_PER_TRADE / stopDistancePercent;
+                realizedPnL = positionValueAtRisk * targetDistancePercent;
             } else if (outcome === 'LOSS') {
                 realizedPnL = -RISK_PER_TRADE; // Fixed $10 loss
             } else if (outcome === 'BREAKEVEN') {
@@ -577,6 +586,9 @@
             saveTradeDatabase();
             updatePerformanceDisplay();
             addTradeMessage(`✅ ${outcome}: P&L $${realizedPnL.toFixed(2)} | Size: ${positionSize.toFixed(4)} ${asset.toUpperCase()}`, 'AI');
+            
+            // BUG FIX #1: Mark as recorded to prevent duplicates
+            setup.recorded = true;
         }        function updatePatternWeights(setup, outcome) {
             const patternKey = `${setup.direction}_${setup.confidence}_${marketCondition}_${volatilityLevel}`;
             if (!tradeDatabase.patterns[patternKey]) {
@@ -789,6 +801,14 @@
                     
                     const fvgResult = detectFairValueGaps(recentCandles, asset);
                     const bestFVG = getBestFairValueGap(fvgResult, currentPrice);
+                    
+                    // BUG FIX #3: Debug FVG detection
+                    console.log(`[${asset}] FVG Detection Debug:`, {
+                        fvgResult: fvgResult,
+                        bestFVG: bestFVG,
+                        bullishFVGs: fvgResult?.bullishFVGs?.length || 0,
+                        bearishFVGs: fvgResult?.bearishFVGs?.length || 0
+                    });
                     
                     const marketStructure = analyzeMarketStructure(recentCandles, '5m');
                     const session = detectSessionBias(Date.now());
@@ -1765,6 +1785,7 @@
             // Detects 3-candle price inefficiencies (gaps)
             
             if (!candles || candles.length < 10) {
+                console.log(`[${asset}] FVG: Not enough candles (${candles?.length || 0})`);
                 return { bullishFVGs: [], bearishFVGs: [] };
             }
             
@@ -1857,6 +1878,14 @@
                     }
                 }
             }
+            
+            console.log(`[${asset}] FVG Detection Complete:`, {
+                bullishFVGs: bullishFVGs.length,
+                bearishFVGs: bearishFVGs.length,
+                totalDetected: bullishFVGs.length + bearishFVGs.length,
+                atr: atr,
+                minGapSize: atr * 0.5
+            });
             
             return {
                 bullishFVGs: bullishFVGs,
