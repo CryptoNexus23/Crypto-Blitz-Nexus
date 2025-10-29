@@ -731,15 +731,29 @@
         }
 
         function scanForSignals(asset, currentPrice) {
+            console.log(`[${asset}] scanForSignals called with price: ${currentPrice}`);
+            
             // === HYBRID SMC + FALLBACK SIGNAL GENERATION ===
             const timeSinceLastSignal = Date.now() - lastSignalTime[asset];
+            console.log(`[${asset}] Time Check:`, {
+                timeSinceLastSignal: timeSinceLastSignal,
+                minInterval: 60000,
+                canProceed: timeSinceLastSignal >= 60000
+            });
             if (timeSinceLastSignal < 60000) return;
             
             // Get recent candle data for SMC analysis
             const recentCandles = getRecentCandles(asset, 50);
             
-            // === STEP 1: TRY SMC DETECTION FIRST ===
-            let smcSignal = null;
+            console.log(`[${asset}] Price History Check:`, {
+                hasPriceHistory: !!priceHistory[asset],
+                priceHistoryLength: priceHistory[asset]?.length || 0,
+                recentCandlesLength: recentCandles?.length || 0,
+                currentPrice: currentPrice
+            });
+            
+            // === STEP 1: ALWAYS RUN SMC DETECTION FOR LEARNING ===
+            let smcData = null;
             if (recentCandles && recentCandles.length >= 20) {
                 try {
                     console.log(`[${asset}] SMC Detection Starting:`, {
@@ -747,7 +761,7 @@
                         currentPrice: currentPrice
                     });
                     
-                    // Run all SMC detection systems
+                    // Run all SMC detection systems for learning
                     const obResult = detectOrderBlocks(recentCandles, asset, '5m');
                     const bestOB = getBestOrderBlock(obResult, currentPrice);
                     
@@ -759,7 +773,7 @@
                     const volatility = detectVolatilityLevel(recentCandles, 20);
                     const trend = detectTrendCondition(recentCandles, 50);
                     
-                    // Calculate confluence score
+                    // Calculate confluence score for learning
                     const setupData = {
                         orderBlock: bestOB,
                         fvg: bestFVG,
@@ -780,101 +794,71 @@
                         factors: confluenceResult.factorsPresent
                     });
                     
-                    // Check if SMC signal is tradeable
-                    const minRequired = 25; // Fixed 25% minimum for crypto
-                    const finalConfidence = confluenceResult.percentage;
-                    
-                    console.log(`[${asset}] Decision Check:`, {
-                        confluenceTradeable: confluenceResult.tradeable,
-                        finalConfidence: finalConfidence,
-                        minRequired: minRequired,
-                        hasActiveTrade: !!activeTrades[asset],
-                        willTrade: confluenceResult.tradeable && finalConfidence >= minRequired && !activeTrades[asset]
-                    });
-                    
-                    if (confluenceResult.tradeable && finalConfidence >= minRequired) {
-                        smcSignal = {
-                            confidence: finalConfidence,
-                            detectionResults: {
-                                session: session,
-                                volatility: volatility,
-                                trend: trend,
-                                marketStructure: marketStructure,
-                                orderBlock: bestOB,
-                                fvg: bestFVG,
-                                confluence: confluenceResult
-                            }
-                        };
-                    }
+                    // Store SMC data for learning (always collect this data)
+                    smcData = {
+                        session: session,
+                        volatility: volatility,
+                        trend: trend,
+                        marketStructure: marketStructure,
+                        orderBlock: bestOB,
+                        fvg: bestFVG,
+                        confluence: confluenceResult
+                    };
                 } catch (error) {
                     console.log('SMC Detection Error:', error);
                 }
             }
             
-            // === STEP 2: FALLBACK TO BASIC DETECTION ===
-            if (!smcSignal) {
-                console.log(`[${asset}] Using fallback detection - SMC failed`);
-                
-                // Use basic detection as fallback
-                const session = detectSessionBias(Date.now());
-                const dir = detectDirectionBias(asset, marketCondition);
-                const vol = detectVolatilityLevel(recentCandles || [], 20);
-                const trend = detectTrendCondition(recentCandles || [], 50);
-                
-                // Calculate basic confidence (0-20 scale like original)
-                let baseConfluence = 8 + Math.floor(Math.random() * 8);
-                baseConfluence += Math.floor(Math.abs(calculateMomentum(asset)) * 2);
-                baseConfluence += Math.floor(session.confidenceBoost * 0.1); // Scale down boost
-                baseConfluence += Math.floor(dir.confidenceBoost * 0.1);
-                baseConfluence += Math.floor(vol.confidenceBoost * 0.1);
-                baseConfluence += Math.floor(trend.confidenceBoost * 0.1);
-                
-                if (marketCondition === 'TRENDING_UP' && calculateMomentum(asset) > 0) baseConfluence += 2;
-                if (marketCondition === 'TRENDING_DOWN' && calculateMomentum(asset) < 0) baseConfluence += 2;
-                if (volatilityLevel === 'HIGH' || volatilityLevel === 'EXTREME') baseConfluence += 3;
-                
-                const minRequired = 25; // Fixed 25% minimum for crypto
-                
-                console.log(`[${asset}] Fallback Decision Check:`, {
-                    baseConfluence: baseConfluence,
-                    minRequired: minRequired,
-                    hasActiveTrade: !!activeTrades[asset],
-                    willTrade: baseConfluence >= minRequired && !activeTrades[asset]
-                });
-                
-                if (baseConfluence >= minRequired) {
-                    smcSignal = {
-                        confidence: baseConfluence,
-                        detectionResults: {
-                            session: session,
-                            volatility: vol,
-                            trend: trend,
-                            marketStructure: null,
-                            orderBlock: null,
-                            fvg: null,
-                            confluence: {
-                                qualityRating: 'BASIC',
-                                totalScore: baseConfluence,
-                                factorsPresent: ['Basic Detection']
-                            }
-                        }
-                    };
-                }
-            }
+            // === STEP 2: ORIGINAL SIGNAL GENERATION WITH SMC LEARNING ===
+            // Use original signal generation logic for consistent trade frequency
+            const session = smcData?.session || detectSessionBias(Date.now());
+            const dir = detectDirectionBias(asset, marketCondition);
+            const vol = smcData?.volatility || detectVolatilityLevel(recentCandles || [], 20);
+            const trend = smcData?.trend || detectTrendCondition(recentCandles || [], 50);
             
-            // === STEP 3: GENERATE SIGNAL IF AVAILABLE ===
-            if (smcSignal && !activeTrades[asset]) {
-                console.log(`[${asset}] 🚀 GENERATING SIGNAL!`, {
-                    confidence: smcSignal.confidence,
-                    quality: smcSignal.detectionResults.confluence?.qualityRating || 'BASIC'
-                });
-                generateAISetup(asset, currentPrice, smcSignal.confidence, calculateMomentum(asset), smcSignal.detectionResults);
+            // Original confidence calculation (restored for learning)
+            let baseConfluence = 8 + Math.floor(Math.random() * 8);
+            baseConfluence += Math.floor(Math.abs(calculateMomentum(asset)) * 2);
+            baseConfluence += Math.floor(session.confidenceBoost * 0.1);
+            baseConfluence += Math.floor(dir.confidenceBoost * 0.1);
+            baseConfluence += Math.floor(vol.confidenceBoost * 0.1);
+            baseConfluence += Math.floor(trend.confidenceBoost * 0.1);
+            
+            if (marketCondition === 'TRENDING_UP' && calculateMomentum(asset) > 0) baseConfluence += 2;
+            if (marketCondition === 'TRENDING_DOWN' && calculateMomentum(asset) < 0) baseConfluence += 2;
+            if (volatilityLevel === 'HIGH' || volatilityLevel === 'EXTREME') baseConfluence += 3;
+            
+            const minRequired = riskConfigs[riskMode].minConfidence; // Use original risk configs
+            
+            console.log(`[${asset}] Signal Generation Check:`, {
+                baseConfluence: baseConfluence,
+                minRequired: minRequired,
+                hasActiveTrade: !!activeTrades[asset],
+                willTrade: baseConfluence >= minRequired && !activeTrades[asset],
+                smcDataAvailable: !!smcData
+            });
+            
+            if (baseConfluence >= minRequired && !activeTrades[asset]) {
+                // Generate signal with SMC data for learning
+                const signalData = {
+                    confidence: baseConfluence,
+                    detectionResults: smcData || {
+                        session: session,
+                        volatility: vol,
+                        trend: trend,
+                        marketStructure: null,
+                        orderBlock: null,
+                        fvg: null,
+                        confluence: {
+                            qualityRating: 'BASIC',
+                            totalScore: baseConfluence,
+                            factorsPresent: ['Basic Detection']
+                        }
+                    }
+                };
+                
+                generateAISetup(asset, currentPrice, signalData.confidence, calculateMomentum(asset), signalData.detectionResults);
                 lastSignalTime[asset] = Date.now();
-            } else {
-                console.log(`[${asset}] ❌ No signal generated:`, {
-                    hasSignal: !!smcSignal,
-                    hasActiveTrade: !!activeTrades[asset]
-                });
             }
         }
 
