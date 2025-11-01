@@ -394,6 +394,37 @@
             }
         };
         
+        // ============================================
+        // VPS API HELPER FUNCTIONS
+        // ============================================
+        const VPS_API_BASE = 'http://5.223.52.88:3001';
+        
+        async function saveToVPS(data) {
+            try {
+                await fetch(`${VPS_API_BASE}/api/data`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+            } catch (err) {
+                console.error('VPS API save failed:', err);
+                // Continue running if API fails
+            }
+        }
+        
+        async function loadFromVPS() {
+            try {
+                const response = await fetch(`${VPS_API_BASE}/api/data`);
+                if (response.ok) {
+                    return await response.json();
+                }
+                return null;
+            } catch (err) {
+                console.error('VPS API load failed:', err);
+                return null;
+            }
+        }
+        
         const riskConfigs = {
             conservative: { stopPct: 0.005, target1: 1.5, target2: 2.5, minConfidence: 8 },
             aggressive: { stopPct: 0.003, target1: 1.0, target2: 2.0, minConfidence: 6 }
@@ -450,7 +481,7 @@
                 // RESTORE PATTERNS - Learning is preserved!
                 tradeDatabase.patterns = savedPatterns;
                 
-                localStorage.setItem('nexusTradeDB', JSON.stringify(tradeDatabase));
+                saveToVPS(tradeDatabase).catch(() => {});
                 updatePerformanceDisplay();
                 addTradeMessage('🔄 Performance stats reset - AI learning PRESERVED!', 'System');
                 addTradeMessage(`🧠 Retained ${Object.keys(savedPatterns).length} learned patterns`, 'AI');
@@ -467,11 +498,10 @@
             }
         }
 
-        function loadTradeDatabase() {
-            const stored = localStorage.getItem('nexusTradeDB');
-            if (stored) {
+        async function loadTradeDatabase() {
+            const data = await loadFromVPS();
+            if (data) {
                 try {
-                    const data = JSON.parse(stored);
                     Object.assign(tradeDatabase, data);
                     addTradeMessage(`🧠 Loaded ${tradeDatabase.trades.length} historical trades`, 'AI');
                 } catch (error) {
@@ -482,7 +512,7 @@
         }
 
         function saveTradeDatabase() {
-            localStorage.setItem('nexusTradeDB', JSON.stringify(tradeDatabase));
+            saveToVPS(tradeDatabase).catch(() => {});
         }
 
         // ============================================
