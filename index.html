@@ -395,34 +395,84 @@
         };
         
         // ============================================
-        // VPS API HELPER FUNCTIONS
+        // VPS API WITH EXPONENTIAL BACKOFF RETRY
         // ============================================
         const VPS_API_BASE = 'http://5.223.52.88:3001';
         
-        async function saveToVPS(data) {
-            try {
-                await fetch(`${VPS_API_BASE}/api/data`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-            } catch (err) {
-                console.error('VPS API save failed:', err);
-                // Continue running if API fails
-            }
-        }
-        
-        async function loadFromVPS() {
-            try {
-                const response = await fetch(`${VPS_API_BASE}/api/data`);
-                if (response.ok) {
-                    return await response.json();
+        async function saveToVPS(data, retries = 3, delayMs = 1000) {
+            for (let attempt = 0; attempt < retries; attempt++) {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 5000);
+                    
+                    const response = await fetch(`${VPS_API_BASE}/api/data`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data),
+                        signal: controller.signal
+                    });
+                    
+                    clearTimeout(timeoutId);
+                    
+                    if (response.ok) {
+                        console.log(`✅ VPS save successful (attempt ${attempt + 1}/${retries})`);
+                        return true;
+                    } else if (response.status === 429) {
+                        // Rate limited - exponential backoff
+                        console.warn(`⏳ VPS rate limited, retrying in ${delayMs * 2}ms`);
+                        await new Promise(resolve => setTimeout(resolve, delayMs * 2));
+                        delayMs = Math.min(delayMs * 2, 10000); // Cap at 10s
+                    } else {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                } catch (err) {
+                    console.warn(`❌ VPS save failed (attempt ${attempt + 1}/${retries}): ${err.message}`);
+                    
+                    if (attempt < retries - 1) {
+                        // Exponential backoff: 1s → 2s → 4s
+                        await new Promise(resolve => setTimeout(resolve, delayMs));
+                        delayMs = Math.min(delayMs * 2, 10000);
+                    } else {
+                        console.error('⚠️ All VPS retries exhausted - DATA MAY BE LOST');
+                        addTradeMessage('⚠️ VPS save failed - check connection', 'Alert');
+                        return false;
+                    }
                 }
-                return null;
-            } catch (err) {
-                console.error('VPS API load failed:', err);
-                return null;
             }
+            return false;
+        }
+
+        async function loadFromVPS(retries = 2, delayMs = 1000) {
+            for (let attempt = 0; attempt < retries; attempt++) {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 5000);
+                    
+                    const response = await fetch(`${VPS_API_BASE}/api/data`, {
+                        signal: controller.signal
+                    });
+                    
+                    clearTimeout(timeoutId);
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        console.log('✅ VPS load successful');
+                        return data;
+                    } else {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                } catch (err) {
+                    console.warn(`❌ VPS load failed (attempt ${attempt + 1}/${retries}): ${err.message}`);
+                    
+                    if (attempt < retries - 1) {
+                        await new Promise(resolve => setTimeout(resolve, delayMs));
+                        delayMs = Math.min(delayMs * 2, 10000);
+                    }
+                }
+            }
+            
+            console.error('⚠️ VPS unavailable after all retries');
+            return null;
         }
         
         const riskConfigs = {
@@ -442,26 +492,69 @@
         ];
 
         async function init() {
+            addTradeMessage('🔧 NEXUS initializing - VPS sync in progress...', 'System');
+            
+            // STEP 1: Connect to data sources FIRST
             connectBinance();
             connectCoinbase();
             updateSessions();
-            await loadTradeDatabase(); // Wait for data to load before continuing
+            
+            // STEP 2: WAIT for VPS data BEFORE starting scans
+            console.log('🔄 Loading trade data from VPS...');
+            await loadTradeDatabase();  // CRITICAL: This is AWAITED
+            
+            // STEP 3: Restore UI for any active trades
+            const activeCount = Object.values(activeTrades).filter(t => t !== null && !t.recorded).length;
+            if (activeCount > 0) {
+                addTradeMessage(`✅ Restored ${activeCount} active trade(s) from VPS`, 'System');
+                
+                Object.keys(activeTrades).forEach(asset => {
+                    const trade = activeTrades[asset];
+                    if (trade && !trade.recorded) {
+                        // Restore display
+                        updateSetupDisplay(asset, trade);
+                        const directionIcon = trade.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️';
+                        updateTradeStatusDisplay(asset, 
+                            `${directionIcon} ACTIVE TRADE (RESUMED)`, 
+                            'trade-active'
+                        );
+                        console.log(`✅ Restored ${asset} trade:`, trade);
+                    }
+                });
+            } else {
+                addTradeMessage('📊 No active trades - Ready to scan', 'System');
+            }
+            
+            // STEP 4: Initialize price history
             priceHistory = {
                 btc: [{price: 60000, change: 1, time: Date.now()}],
                 eth: [{price: 3000, change: 1, time: Date.now()}]
             };
+            
+            // STEP 5: NOW start scanning loops (AFTER restore complete)
             setInterval(() => adaptiveScan(), 3000);
             setInterval(updateSessions, 1000);
             setInterval(() => updatePersistentLevels(), 15015);
-            setInterval(() => updatePerformanceDisplay(), 5000);
+            setInterval(updatePerformanceDisplay, 5000);
+            
+            // STEP 6: Background VPS sync every 10 seconds
+            setInterval(async () => {
+                await syncWithVPS();
+            }, 10000);
+            
+            // STEP 7: Health checks every 30 seconds
+            setInterval(performHealthCheck, 30000);
+            performHealthCheck(); // Run immediately on load
+            
             setTimeout(() => {
                 if (currentPrices.btc > 0 && currentPrices.eth > 0) {
                     updatePersistentLevels();
                 }
             }, 3000);
-            updatePerformanceDisplay(); // Initialize display immediately
-            addTradeMessage('🛡️ Bulletproof Breakeven Strategy Initialized - All fixes applied', 'AI');
-            addTradeMessage('📊 Signal generation: 4-8 per day | OB/FVG: Always visible | Trade monitoring: Real-time', 'AI');
+            
+            updatePerformanceDisplay();
+            addTradeMessage('✅ VPS-synced trading engine online', 'AI');
+            addTradeMessage('🔄 Continuous VPS sync active (10s interval)', 'System');
         }
 
         // ============================================
@@ -509,12 +602,14 @@
                     if (data.activeTrades) {
                         Object.assign(activeTrades, data.activeTrades);
                         
-                        // Restore active trade displays
+                        // ✅ NEW: Restore UI for each active trade
                         Object.keys(activeTrades).forEach(asset => {
-                            if (activeTrades[asset] && !activeTrades[asset].recorded) {
-                                updateSetupDisplay(asset, activeTrades[asset]);
+                            const trade = activeTrades[asset];
+                            if (trade && !trade.recorded) {
+                                updateSetupDisplay(asset, trade);
+                                const directionIcon = trade.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️';
                                 updateTradeStatusDisplay(asset, 
-                                    `${activeTrades[asset].direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} ACTIVE TRADE`, 
+                                    `${directionIcon} ACTIVE (VPS SYNCED)`, 
                                     'trade-active'
                                 );
                             }
@@ -522,25 +617,145 @@
                         
                         const activeCount = Object.values(activeTrades).filter(t => t !== null && !t.recorded).length;
                         if (activeCount > 0) {
-                            addTradeMessage(`📊 Restored ${activeCount} active trade(s)`, 'System');
+                            addTradeMessage(`✅ Restored ${activeCount} active trades from VPS`, 'System');
+                            console.log('Active trades restored:', activeTrades);
                         }
                     }
                     
-                    addTradeMessage(`🧠 Loaded ${tradeDatabase.trades.length} historical trades`, 'AI');
+                    addTradeMessage(`📊 Loaded ${tradeDatabase.trades?.length || 0} historical trades`, 'AI');
                 } catch (error) {
                     addTradeMessage('⚠️ Trade database corrupted - Starting fresh', 'System');
+                    console.error('VPS data load error:', error);
                 }
+            } else {
+                addTradeMessage('⚠️ VPS unavailable - Running with empty database', 'System');
             }
+            
             updatePerformanceDisplay();
+        }
+
+        // ============================================
+        // BACKGROUND VPS SYNC - MULTI-DEVICE COORDINATION
+        // ============================================
+
+        async function syncWithVPS() {
+            try {
+                // Get latest data from VPS
+                const vpsData = await loadFromVPS(1, 500); // Quick retry
+                
+                if (!vpsData) {
+                    // VPS unreachable - skip this sync cycle
+                    return;
+                }
+                
+                // Check for discrepancies
+                let needsUpdate = false;
+                
+                // Check if VPS has active trades we don't have
+                if (vpsData.activeTrades) {
+                    Object.keys(vpsData.activeTrades).forEach(asset => {
+                        const vpsTrade = vpsData.activeTrades[asset];
+                        const localTrade = activeTrades[asset];
+                        
+                        // VPS has trade, we don't
+                        if (vpsTrade && !localTrade) {
+                            console.log(`🔄 New trade from VPS: ${asset}`);
+                            activeTrades[asset] = vpsTrade;
+                            updateSetupDisplay(asset, vpsTrade);
+                            updateTradeStatusDisplay(asset, 
+                                `${vpsTrade.direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} SYNCED FROM VPS`,
+                                'trade-active'
+                            );
+                            needsUpdate = true;
+                        }
+                        
+                        // VPS trade is null, ours isn't (trade closed elsewhere)
+                        if (!vpsTrade && localTrade) {
+                            console.log(`🔄 Trade closed on VPS: ${asset}`);
+                            activeTrades[asset] = null;
+                            clearTradeDisplay(asset);
+                            needsUpdate = true;
+                        }
+                    });
+                }
+                
+                // Update tradeDatabase if performance stats changed
+                if (vpsData.performance && 
+                    vpsData.performance.totalTrades !== tradeDatabase.performance.totalTrades) {
+                    Object.assign(tradeDatabase, vpsData);
+                    updatePerformanceDisplay();
+                    needsUpdate = true;
+                }
+                
+                if (needsUpdate) {
+                    console.log('🔄 Synced with VPS - Dashboard updated');
+                }
+                
+            } catch (err) {
+                console.warn('Background sync error:', err);
+            }
+        }
+
+        // ============================================
+        // HEALTH CHECK - DETECT DESYNC
+        // ============================================
+
+        async function performHealthCheck() {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 3000);
+                
+                const response = await fetch(`${VPS_API_BASE}/api/health`, {
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                if (response.ok) {
+                    const health = await response.json();
+                    
+                    // Display VPS status
+                    const statusEl = document.getElementById('connectionStatus');
+                    if (statusEl) {
+                        const activeTradeCount = Object.values(activeTrades).filter(t => t !== null).length;
+                        const vpsTradeCount = health.activeTrades?.length || 0;
+                        
+                        if (activeTradeCount === vpsTradeCount) {
+                            statusEl.textContent = `🟢 SYNCED (${activeTradeCount} trades)`;
+                            statusEl.style.color = 'var(--green)';
+                        } else {
+                            statusEl.textContent = `⚠️ DESYNC (Local:${activeTradeCount} VPS:${vpsTradeCount})`;
+                            statusEl.style.color = 'var(--yellow)';
+                            
+                            // Auto-resync
+                            console.warn('Desync detected - forcing resync');
+                            await syncWithVPS();
+                        }
+                    }
+                }
+            } catch (err) {
+                const statusEl = document.getElementById('connectionStatus');
+                if (statusEl) {
+                    statusEl.textContent = '🔴 VPS OFFLINE';
+                    statusEl.style.color = 'var(--red)';
+                }
+                console.warn('Health check failed:', err.message);
+            }
         }
 
         function saveTradeDatabase() {
             // Save both trade database and active trades
             const dataToSave = {
                 ...tradeDatabase,
-                activeTrades: activeTrades
+                activeTrades: activeTrades,
+                timestamp: Date.now()
             };
-            saveToVPS(dataToSave).catch(() => {});
+            
+            // Save to VPS asynchronously (with retry)
+            console.log('💾 Saving trade database to VPS...');
+            saveToVPS(dataToSave).catch(err => {
+                console.error('VPS save failed after retries:', err);
+            });
         }
 
         // ============================================
@@ -654,7 +869,21 @@
             tradeDatabase.performance.profitFactor = totalLossesAmount > 0 ? totalWinsAmount / totalLossesAmount : (totalWinsAmount > 0 ? Infinity : 0);
 
             updatePatternWeights(setup, outcome);
-            saveTradeDatabase();
+            
+            // ✅ Save to VPS immediately after recording
+            console.log(`💾 Recording ${asset} ${outcome}: P&L $${realizedPnL.toFixed(2)}`);
+            
+            const dataToSave = {
+                ...tradeDatabase,
+                activeTrades: activeTrades,
+                timestamp: Date.now()
+            };
+            
+            saveToVPS(dataToSave).catch(err => {
+                console.error('Failed to save trade outcome to VPS:', err);
+                addTradeMessage('⚠️ Trade recorded locally but VPS save failed', 'Alert');
+            });
+            
             updatePerformanceDisplay();
             addTradeMessage(`✅ ${outcome}: P&L $${realizedPnL.toFixed(2)} | Size: ${positionSize.toFixed(4)} ${asset.toUpperCase()}`, 'AI');
             
@@ -1018,8 +1247,20 @@
             }
             
             activeTrades[asset] = setup;
+            
+            // ✅ IMMEDIATELY save to VPS (don't wait for background sync)
+            const dataToSave = {
+                ...tradeDatabase,
+                activeTrades: activeTrades,
+                timestamp: Date.now()
+            };
+            console.log('💾 New trade opened - saving to VPS:', asset);
+            saveToVPS(dataToSave).catch(err => {
+                console.error('Failed to save new setup to VPS:', err);
+                addTradeMessage('⚠️ VPS save failed - trade may not sync to other devices', 'Alert');
+            });
+            
             updateSetupDisplay(asset, setup);
-            saveTradeDatabase(); // Save active trade immediately
             
             // Enhanced signal display with SMC information
             const directionIcon = direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️';
