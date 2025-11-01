@@ -511,11 +511,24 @@
                 // Calculate profit based on percentage moves (not absolute prices)
                 const stopDistancePercent = Math.abs((setup.stop - setup.entryPrice) / setup.entryPrice);
                 const targetDistancePercent = Math.abs((setup.t2 - setup.entryPrice) / setup.entryPrice);
-                const positionValueAtRisk = RISK_PER_TRADE / stopDistancePercent;
-                realizedPnL = positionValueAtRisk * targetDistancePercent;
+                
+                // Safety check to prevent division by zero
+                if (stopDistancePercent > 0 && targetDistancePercent > 0) {
+                    const positionValueAtRisk = RISK_PER_TRADE / stopDistancePercent;
+                    realizedPnL = positionValueAtRisk * targetDistancePercent;
+                } else {
+                    // Fallback to simple calculation if percentages are invalid
+                    realizedPnL = RISK_PER_TRADE * 3; // Assume 3:1 R:R for wins
+                }
             } else if (outcome === 'LOSS') {
                 realizedPnL = -RISK_PER_TRADE; // Fixed $10 loss
             } else if (outcome === 'BREAKEVEN') {
+                realizedPnL = 0;
+            }
+            
+            // Final safety check: ensure realizedPnL is a valid number
+            if (isNaN(realizedPnL) || !isFinite(realizedPnL)) {
+                console.error(`Invalid P&L calculated: ${realizedPnL} for ${asset} ${outcome}. Setting to 0.`);
                 realizedPnL = 0;
             }
 
@@ -802,13 +815,19 @@
                     const fvgResult = detectFairValueGaps(recentCandles, asset);
                     const bestFVG = getBestFairValueGap(fvgResult, currentPrice);
                     
-                    // BUG FIX #3: Debug FVG detection
-                    console.log(`[${asset}] FVG Detection Debug:`, {
-                        fvgResult: fvgResult,
-                        bestFVG: bestFVG,
-                        bullishFVGs: fvgResult?.bullishFVGs?.length || 0,
-                        bearishFVGs: fvgResult?.bearishFVGs?.length || 0
-                    });
+            // BUG FIX #3: Debug FVG detection (only if FVGs found)
+            if (fvgResult && (fvgResult.bullishFVGs?.length > 0 || fvgResult.bearishFVGs?.length > 0)) {
+                console.log(`[${asset}] ✅ FVGs Detected:`, {
+                    bullishFVGs: fvgResult.bullishFVGs.length,
+                    bearishFVGs: fvgResult.bearishFVGs.length,
+                    bestFVG: bestFVG
+                });
+            } else if (fvgResult && fvgResult.totalDetected === 0) {
+                // Log periodically when no FVGs are found (helps diagnose)
+                if (Math.random() < 0.1) { // 10% chance to log
+                    console.log(`[${asset}] ℹ️ No FVGs detected. Synthetic candles may not create realistic gaps.`);
+                }
+            }
                     
                     const marketStructure = analyzeMarketStructure(recentCandles, '5m');
                     const session = detectSessionBias(Date.now());
@@ -1785,7 +1804,6 @@
             // Detects 3-candle price inefficiencies (gaps)
             
             if (!candles || candles.length < 10) {
-                console.log(`[${asset}] FVG: Not enough candles (${candles?.length || 0})`);
                 return { bullishFVGs: [], bearishFVGs: [] };
             }
             
@@ -1878,14 +1896,6 @@
                     }
                 }
             }
-            
-            console.log(`[${asset}] FVG Detection Complete:`, {
-                bullishFVGs: bullishFVGs.length,
-                bearishFVGs: bearishFVGs.length,
-                totalDetected: bullishFVGs.length + bearishFVGs.length,
-                atr: atr,
-                minGapSize: atr * 0.5
-            });
             
             return {
                 bullishFVGs: bullishFVGs,
