@@ -441,11 +441,11 @@
             {name:'London',tz:'GMT',start:8,end:17}, {name:'New York',tz:'EST',start:13,end:22}
         ];
 
-        function init() {
+        async function init() {
             connectBinance();
             connectCoinbase();
             updateSessions();
-            loadTradeDatabase();
+            await loadTradeDatabase(); // Wait for data to load before continuing
             priceHistory = {
                 btc: [{price: 60000, change: 1, time: Date.now()}],
                 eth: [{price: 3000, change: 1, time: Date.now()}]
@@ -459,6 +459,7 @@
                     updatePersistentLevels();
                 }
             }, 3000);
+            updatePerformanceDisplay(); // Initialize display immediately
             addTradeMessage('🛡️ Bulletproof Breakeven Strategy Initialized - All fixes applied', 'AI');
             addTradeMessage('📊 Signal generation: 4-8 per day | OB/FVG: Always visible | Trade monitoring: Real-time', 'AI');
         }
@@ -503,6 +504,28 @@
             if (data) {
                 try {
                     Object.assign(tradeDatabase, data);
+                    
+                    // Restore active trades if they exist
+                    if (data.activeTrades) {
+                        Object.assign(activeTrades, data.activeTrades);
+                        
+                        // Restore active trade displays
+                        Object.keys(activeTrades).forEach(asset => {
+                            if (activeTrades[asset] && !activeTrades[asset].recorded) {
+                                updateSetupDisplay(asset, activeTrades[asset]);
+                                updateTradeStatusDisplay(asset, 
+                                    `${activeTrades[asset].direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️'} ACTIVE TRADE`, 
+                                    'trade-active'
+                                );
+                            }
+                        });
+                        
+                        const activeCount = Object.values(activeTrades).filter(t => t !== null && !t.recorded).length;
+                        if (activeCount > 0) {
+                            addTradeMessage(`📊 Restored ${activeCount} active trade(s)`, 'System');
+                        }
+                    }
+                    
                     addTradeMessage(`🧠 Loaded ${tradeDatabase.trades.length} historical trades`, 'AI');
                 } catch (error) {
                     addTradeMessage('⚠️ Trade database corrupted - Starting fresh', 'System');
@@ -512,7 +535,12 @@
         }
 
         function saveTradeDatabase() {
-            saveToVPS(tradeDatabase).catch(() => {});
+            // Save both trade database and active trades
+            const dataToSave = {
+                ...tradeDatabase,
+                activeTrades: activeTrades
+            };
+            saveToVPS(dataToSave).catch(() => {});
         }
 
         // ============================================
@@ -991,6 +1019,7 @@
             
             activeTrades[asset] = setup;
             updateSetupDisplay(asset, setup);
+            saveTradeDatabase(); // Save active trade immediately
             
             // Enhanced signal display with SMC information
             const directionIcon = direction === 'BULLISH' ? '🟢⬆️' : '🔴⬇️';
@@ -1112,6 +1141,7 @@
                 setTimeout(() => {
                     activeTrades[asset] = null;
                     clearTradeDisplay(asset);
+                    saveTradeDatabase(); // Save after clearing
                 }, 5000);
             }
             else if (trade.reachedTarget1 && !trade.reachedTarget2 &&
@@ -1126,6 +1156,7 @@
                 setTimeout(() => {
                     activeTrades[asset] = null;
                     clearTradeDisplay(asset);
+                    saveTradeDatabase(); // Save after clearing
                 }, 5000);
             }
             else if (!trade.reachedTarget1 &&
@@ -1141,6 +1172,7 @@
                 setTimeout(() => {
                     activeTrades[asset] = null;
                     clearTradeDisplay(asset);
+                    saveTradeDatabase(); // Save after clearing
                 }, 5000);
             }
             else if (trade.status === 'ACTIVE') {
@@ -1419,7 +1451,7 @@
 
         function updatePerformanceDisplay() { /* unchanged */ 
             const perf = tradeDatabase.performance;
-            document.getElementById('totalTrades').textContent = perf.totalTrades;
+            document.getElementById('totalTrades').textContent = perf.totalTrades || 0;
             document.getElementById('winRate').textContent = (perf.winRate || 0).toFixed(1) + '%';
             document.getElementById('profitFactor').textContent = (perf.profitFactor || 0).toFixed(2);
             document.getElementById('avgWin').textContent = '$' + Math.round(perf.avgWin || 0);
