@@ -1,0 +1,1120 @@
+{
+  "trades": [
+    {
+      "asset": "eth",
+      "setup": {
+        "entry": {
+          "min": 3048.793635,
+          "max": 3045.746365
+        },
+        "stop": 3047.27,
+        "t1": 3024.4154750000002,
+        "t2": 3009.179125,
+        "confidence": 7,
+        "direction": "BEARISH",
+        "timestamp": 1763608063974,
+        "probability": 25,
+        "entryPrice": 3047.27,
+        "status": "BREAKEVEN",
+        "reachedTarget1": true,
+        "reachedTarget2": false,
+        "sessionActive": "TOKYO",
+        "higherTFBias": "bullish",
+        "higherTFConfidence": "high",
+        "higherTFStrength": 0.5438011809468356,
+        "volatilityLevel": "LOW",
+        "marketCondition": "BULLISH",
+        "confluenceScore": 7,
+        "confluenceRating": "GOOD",
+        "obEntryType": "OB_ENTRY",
+        "obEntryQuality": "HIGH",
+        "smcData": {
+          "session": {
+            "sessionName": "TOKYO",
+            "confidenceBoost": 18
+          },
+          "volatility": {
+            "volatilityLevel": "LOW",
+            "atr": 1.4763157894736698,
+            "confidenceBoost": -5
+          },
+          "trend": {
+            "trendType": "BULLISH",
+            "confidenceBoost": 8
+          },
+          "marketStructure": {
+            "trend": "neutral",
+            "strength": 0,
+            "recentSwingHigh": {
+              "price": 3048.56,
+              "index": 36,
+              "timestamp": 1763607299999,
+              "broken": false
+            },
+            "recentSwingLow": {
+              "price": 3030.07,
+              "index": 28,
+              "timestamp": 1763606819999,
+              "broken": false
+            },
+            "bosDetected": false,
+            "bosType": null,
+            "chochDetected": false,
+            "higherHighs": 2,
+            "higherLows": 0,
+            "lowerHighs": 0,
+            "lowerLows": 1
+          },
+          "orderBlock": {
+            "id": "bull_ob_1763608063971_34",
+            "type": "bullish",
+            "high": 3045.25,
+            "low": 3043.15,
+            "timestamp": 1763607179999,
+            "candleIndex": 34,
+            "displacementSize": 8.020000000000891,
+            "freshnessStatus": "fresh",
+            "valid": true,
+            "testedCount": 0,
+            "qualityScore": 100
+          },
+          "fvg": {
+            "id": "bear_fvg_1763608063973_22",
+            "type": "bearish",
+            "top": 3039.47,
+            "bottom": 3024.89,
+            "size": 14.579999999999927,
+            "middleCandleIndex": 22,
+            "timestamp": 1763600099999,
+            "qualityScore": 70,
+            "fillStatus": "unfilled",
+            "testCount": 0,
+            "valid": true
+          },
+          "confluence": {
+            "totalScore": 7,
+            "maxScore": 18,
+            "percentage": 39,
+            "qualityRating": "GOOD",
+            "factorsPresent": [
+              "High Quality OB",
+              "Quality FVG",
+              "Counter HTF Bias",
+              "HTF Aligned",
+              "3:1 R:R"
+            ],
+            "positionSizeMultiplier": 0.5,
+            "tradeable": true,
+            "timestamp": 1763608063974
+          },
+          "fvgDetection": {
+            "bullishFVGs": [],
+            "bearishFVGs": [
+              {
+                "id": "bear_fvg_1763608063973_22",
+                "type": "bearish",
+                "top": 3039.47,
+                "bottom": 3024.89,
+                "size": 14.579999999999927,
+                "middleCandleIndex": 22,
+                "timestamp": 1763600099999,
+                "qualityScore": 70,
+                "fillStatus": "unfilled",
+                "testCount": 0,
+                "valid": true
+              }
+            ],
+            "totalDetected": 1,
+            "bestFVG": {
+              "id": "bear_fvg_1763608063973_22",
+              "type": "bearish",
+              "top": 3039.47,
+              "bottom": 3024.89,
+              "size": 14.579999999999927,
+              "middleCandleIndex": 22,
+              "timestamp": 1763600099999,
+              "qualityScore": 70,
+              "fillStatus": "unfilled",
+              "testCount": 0,
+              "valid": true
+            }
+          },
+          "higherTimeframeBias": {
+            "bias": "bullish",
+            "strength": 0.5438011809468356,
+            "confidence": "high"
+          },
+          "obEntryType": "OB_ENTRY",
+          "obEntryQuality": "HIGH"
+        },
+        "entryOrderId": "PENDING",
+        "stopOrderId": "PENDING",
+        "t1OrderId": "PENDING",
+        "t2OrderId": "PENDING",
+        "positionSize": 3.281625848710555,
+        "riskAmount": 50,
+        "binanceSymbol": "ETHUSDT",
+        "originalStop": 3062.5063499999997,
+        "outcome": "BREAKEVEN",
+        "profit": 0,
+        "recorded": true
+      },
+      "outcome": "BREAKEVEN",
+      "profit": 0,
+      "positionSize": 3.281625848710555,
+      "timestamp": 1763608063974,
+      "reachedTarget1": true,
+      "reachedTarget2": false,
+      "sessionActive": "TOKYO",
+      "higherTFBias": "bullish",
+      "higherTFStrength": 0.5438011809468356,
+      "higherTFConfidence": "high",
+      "volatilityLevel": "LOW",
+      "marketCondition": "BULLISH",
+      "confluenceScore": 7,
+      "confluenceRating": "GOOD",
+      "obDetected": true,
+      "obLevel": 3045.25,
+      "obStrength": "STRONG",
+      "fvgDetected": true,
+      "fvgTop": 3039.47,
+      "fvgBottom": 3024.89,
+      "fvgQuality": "HIGH",
+      "confluenceFactors": [
+        "High Quality OB",
+        "Quality FVG",
+        "Counter HTF Bias",
+        "HTF Aligned",
+        "3:1 R:R"
+      ],
+      "confluenceCount": 5,
+      "signalQuality": "GOOD",
+      "obEntryType": "OB_ENTRY",
+      "obEntryQuality": "HIGH",
+      "obDistancePercent": "0.0663"
+    },
+    {
+      "asset": "btc",
+      "setup": {
+        "entry": {
+          "min": 92588.49111,
+          "max": 92495.94889
+        },
+        "stop": 93004.93109999999,
+        "t1": 91848.15335000001,
+        "t2": 91385.44225000001,
+        "confidence": 8,
+        "direction": "BEARISH",
+        "timestamp": 1763608063965,
+        "probability": 13,
+        "entryPrice": 92542.22,
+        "status": "STOPPED",
+        "reachedTarget1": false,
+        "reachedTarget2": false,
+        "sessionActive": "TOKYO",
+        "higherTFBias": "bullish",
+        "higherTFConfidence": "high",
+        "higherTFStrength": 0.684577869217901,
+        "volatilityLevel": "LOW",
+        "marketCondition": "RANGING",
+        "confluenceScore": 8,
+        "confluenceRating": "VERY GOOD",
+        "obEntryType": "OB_ENTRY",
+        "obEntryQuality": "HIGH",
+        "smcData": {
+          "session": {
+            "sessionName": "TOKYO",
+            "confidenceBoost": 18
+          },
+          "volatility": {
+            "volatilityLevel": "LOW",
+            "atr": 36.8015789473705,
+            "confidenceBoost": -5
+          },
+          "trend": {
+            "trendType": "RANGING",
+            "confidenceBoost": 0
+          },
+          "marketStructure": {
+            "trend": "bearish",
+            "strength": 67,
+            "recentSwingHigh": {
+              "price": 92587.45,
+              "index": 23,
+              "timestamp": 1763606519999,
+              "broken": false
+            },
+            "recentSwingLow": {
+              "price": 92543.58,
+              "index": 41,
+              "timestamp": 1763607599999,
+              "broken": false
+            },
+            "bosDetected": true,
+            "bosType": "bearish_bos",
+            "chochDetected": false,
+            "higherHighs": 0,
+            "higherLows": 1,
+            "lowerHighs": 1,
+            "lowerLows": 1
+          },
+          "orderBlock": {
+            "id": "bull_ob_1763608063958_10",
+            "type": "bullish",
+            "high": 92576.51,
+            "low": 92500.39,
+            "timestamp": 1763605739999,
+            "candleIndex": 10,
+            "displacementSize": 265.51000000002387,
+            "freshnessStatus": "fresh",
+            "valid": true,
+            "testedCount": 0,
+            "qualityScore": 100
+          },
+          "fvg": {
+            "id": "bull_fvg_1763608063961_25",
+            "type": "bullish",
+            "top": 92197.66,
+            "bottom": 91932.97,
+            "size": 264.6900000000023,
+            "middleCandleIndex": 25,
+            "timestamp": 1763600999999,
+            "qualityScore": 60,
+            "fillStatus": "unfilled",
+            "testCount": 0,
+            "valid": true
+          },
+          "confluence": {
+            "totalScore": 8,
+            "maxScore": 18,
+            "percentage": 44,
+            "qualityRating": "VERY GOOD",
+            "factorsPresent": [
+              "High Quality OB",
+              "Quality FVG",
+              "BoS Detected",
+              "Counter HTF Bias",
+              "HTF Aligned",
+              "3:1 R:R"
+            ],
+            "positionSizeMultiplier": 0.75,
+            "tradeable": true,
+            "timestamp": 1763608063964
+          },
+          "fvgDetection": {
+            "bullishFVGs": [
+              {
+                "id": "bull_fvg_1763608063961_25",
+                "type": "bullish",
+                "top": 92197.66,
+                "bottom": 91932.97,
+                "size": 264.6900000000023,
+                "middleCandleIndex": 25,
+                "timestamp": 1763600999999,
+                "qualityScore": 60,
+                "fillStatus": "unfilled",
+                "testCount": 0,
+                "valid": true
+              },
+              {
+                "id": "bull_fvg_1763608063961_30",
+                "type": "bullish",
+                "top": 92517.65,
+                "bottom": 92345.07,
+                "size": 172.5799999999872,
+                "middleCandleIndex": 30,
+                "timestamp": 1763602499999,
+                "qualityScore": 50,
+                "fillStatus": "unfilled",
+                "testCount": 0,
+                "valid": true
+              }
+            ],
+            "bearishFVGs": [],
+            "totalDetected": 2,
+            "bestFVG": {
+              "id": "bull_fvg_1763608063961_25",
+              "type": "bullish",
+              "top": 92197.66,
+              "bottom": 91932.97,
+              "size": 264.6900000000023,
+              "middleCandleIndex": 25,
+              "timestamp": 1763600999999,
+              "qualityScore": 60,
+              "fillStatus": "unfilled",
+              "testCount": 0,
+              "valid": true
+            }
+          },
+          "higherTimeframeBias": {
+            "bias": "bullish",
+            "strength": 0.684577869217901,
+            "confidence": "high"
+          },
+          "obEntryType": "OB_ENTRY",
+          "obEntryQuality": "HIGH"
+        },
+        "entryOrderId": "PENDING",
+        "stopOrderId": "PENDING",
+        "t1OrderId": "PENDING",
+        "t2OrderId": "PENDING",
+        "positionSize": 0.16208817985996507,
+        "riskAmount": 75,
+        "binanceSymbol": "BTCUSDT",
+        "outcome": "LOSS",
+        "profit": -475.5899999999965,
+        "recorded": true
+      },
+      "outcome": "LOSS",
+      "profit": 475.5899999999965,
+      "positionSize": 0.16208817985996507,
+      "timestamp": 1763608063965,
+      "reachedTarget1": false,
+      "reachedTarget2": false,
+      "sessionActive": "TOKYO",
+      "higherTFBias": "bullish",
+      "higherTFStrength": 0.684577869217901,
+      "higherTFConfidence": "high",
+      "volatilityLevel": "LOW",
+      "marketCondition": "RANGING",
+      "confluenceScore": 8,
+      "confluenceRating": "VERY GOOD",
+      "obDetected": true,
+      "obLevel": 92576.51,
+      "obStrength": "STRONG",
+      "fvgDetected": true,
+      "fvgTop": 92197.66,
+      "fvgBottom": 91932.97,
+      "fvgQuality": "HIGH",
+      "confluenceFactors": [
+        "High Quality OB",
+        "Quality FVG",
+        "BoS Detected",
+        "Counter HTF Bias",
+        "HTF Aligned",
+        "3:1 R:R"
+      ],
+      "confluenceCount": 6,
+      "signalQuality": "VERY GOOD",
+      "obEntryType": "OB_ENTRY",
+      "obEntryQuality": "HIGH",
+      "obDistancePercent": "0.0000"
+    },
+    {
+      "asset": "eth",
+      "setup": {
+        "entry": {
+          "min": 3037.83816,
+          "max": 3034.8018400000005
+        },
+        "stop": 3051.5016,
+        "t1": 3013.5476000000003,
+        "t2": 2998.3660000000004,
+        "confidence": 9,
+        "direction": "BEARISH",
+        "timestamp": 1764354564025,
+        "probability": 33,
+        "entryPrice": 1,
+        "status": "STOPPED",
+        "reachedTarget1": false,
+        "reachedTarget2": false,
+        "sessionActive": "NEW_YORK",
+        "higherTFBias": "neutral",
+        "higherTFConfidence": "low",
+        "higherTFStrength": 0,
+        "volatilityLevel": "LOW",
+        "marketCondition": "BEARISH",
+        "confluenceScore": 9,
+        "confluenceRating": "VERY GOOD",
+        "obEntryType": "OB_ENTRY",
+        "obEntryQuality": "HIGH",
+        "smcData": {
+          "session": {
+            "sessionName": "NEW_YORK",
+            "confidenceBoost": 5
+          },
+          "volatility": {
+            "volatilityLevel": "LOW",
+            "atr": 0.06105263157891577,
+            "confidenceBoost": -5
+          },
+          "trend": {
+            "trendType": "BEARISH",
+            "confidenceBoost": 8
+          },
+          "marketStructure": {
+            "trend": "bullish",
+            "strength": 100,
+            "recentSwingHigh": {
+              "price": 3049.01,
+              "index": 33,
+              "timestamp": 1764353639999,
+              "broken": false
+            },
+            "recentSwingLow": {
+              "price": 3032.54,
+              "index": 44,
+              "timestamp": 1764354299999,
+              "broken": false
+            },
+            "bosDetected": false,
+            "bosType": null,
+            "chochDetected": false,
+            "higherHighs": 1,
+            "higherLows": 1,
+            "lowerHighs": 0,
+            "lowerLows": 0
+          },
+          "orderBlock": {
+            "id": "bull_ob_1764354564022_13",
+            "type": "bullish",
+            "high": 3038.79,
+            "low": 3036.58,
+            "timestamp": 1764352439999,
+            "candleIndex": 13,
+            "displacementSize": 9.639999999999418,
+            "freshnessStatus": "fresh",
+            "valid": true,
+            "testedCount": 0,
+            "qualityScore": 80
+          },
+          "fvg": {
+            "id": "bear_fvg_1764354564023_24",
+            "type": "bearish",
+            "top": 3056.92,
+            "bottom": 3041.02,
+            "size": 15.900000000000091,
+            "middleCandleIndex": 24,
+            "timestamp": 1764347099999,
+            "qualityScore": 80,
+            "fillStatus": "unfilled",
+            "testCount": 0,
+            "valid": true
+          },
+          "confluence": {
+            "totalScore": 9,
+            "maxScore": 18,
+            "percentage": 50,
+            "qualityRating": "VERY GOOD",
+            "factorsPresent": [
+              "High Quality OB",
+              "Quality FVG",
+              "Active Period",
+              "HTF Aligned",
+              "3:1 R:R"
+            ],
+            "positionSizeMultiplier": 0.75,
+            "tradeable": true,
+            "timestamp": 1764354564025
+          },
+          "fvgDetection": {
+            "bullishFVGs": [],
+            "bearishFVGs": [
+              {
+                "id": "bear_fvg_1764354564023_24",
+                "type": "bearish",
+                "top": 3056.92,
+                "bottom": 3041.02,
+                "size": 15.900000000000091,
+                "middleCandleIndex": 24,
+                "timestamp": 1764347099999,
+                "qualityScore": 80,
+                "fillStatus": "unfilled",
+                "testCount": 0,
+                "valid": true
+              }
+            ],
+            "totalDetected": 1,
+            "bestFVG": {
+              "id": "bear_fvg_1764354564023_24",
+              "type": "bearish",
+              "top": 3056.92,
+              "bottom": 3041.02,
+              "size": 15.900000000000091,
+              "middleCandleIndex": 24,
+              "timestamp": 1764347099999,
+              "qualityScore": 80,
+              "fillStatus": "unfilled",
+              "testCount": 0,
+              "valid": true
+            }
+          },
+          "higherTimeframeBias": {
+            "bias": "neutral",
+            "strength": 0,
+            "confidence": "low"
+          },
+          "obEntryType": "OB_ENTRY",
+          "obEntryQuality": "HIGH"
+        },
+        "entryOrderId": "PAPER_1764354566313",
+        "stopOrderId": "PAPER_SL_1764354566815",
+        "t1OrderId": "PAPER_TP_1764354567318",
+        "t2OrderId": "PAPER_TP_1764354567818",
+        "positionSize": 0.4940110923749838,
+        "riskAmount": 7.499878799999999,
+        "binanceSymbol": "ETHUSDT",
+        "outcome": "LOSS",
+        "profit": -16.329999999999927,
+        "recorded": true
+      },
+      "outcome": "LOSS",
+      "profit": 16.329999999999927,
+      "positionSize": 0.4940110923749838,
+      "timestamp": 1764354564025,
+      "reachedTarget1": false,
+      "reachedTarget2": false,
+      "sessionActive": "NEW_YORK",
+      "higherTFBias": "neutral",
+      "higherTFStrength": 0,
+      "higherTFConfidence": "low",
+      "volatilityLevel": "LOW",
+      "marketCondition": "BEARISH",
+      "confluenceScore": 9,
+      "confluenceRating": "VERY GOOD",
+      "obDetected": true,
+      "obLevel": 3038.79,
+      "obStrength": "STRONG",
+      "fvgDetected": true,
+      "fvgTop": 3056.92,
+      "fvgBottom": 3041.02,
+      "fvgQuality": "HIGH",
+      "confluenceFactors": [
+        "High Quality OB",
+        "Quality FVG",
+        "Active Period",
+        "HTF Aligned",
+        "3:1 R:R"
+      ],
+      "confluenceCount": 5,
+      "signalQuality": "VERY GOOD",
+      "obEntryType": "OB_ENTRY",
+      "obEntryQuality": "HIGH",
+      "obDistancePercent": "303558.0000"
+    }
+  ],
+  "activeTrades": {
+    "btc": {
+      "entry": {
+        "min": 90736.28916,
+        "max": 90827.07083999999
+      },
+      "stop": 90327.7716,
+      "t1": 91462.5426,
+      "t2": 91916.45099999999,
+      "confidence": 9,
+      "direction": "BULLISH",
+      "timestamp": 1764354501023,
+      "probability": 22,
+      "entryPrice": 1,
+      "status": "ACTIVE",
+      "reachedTarget1": false,
+      "reachedTarget2": false,
+      "sessionActive": "NEW_YORK",
+      "higherTFBias": "neutral",
+      "higherTFConfidence": "low",
+      "higherTFStrength": 0,
+      "volatilityLevel": "LOW",
+      "marketCondition": "BULLISH",
+      "confluenceScore": 9,
+      "confluenceRating": "VERY GOOD",
+      "obEntryType": "OB_ENTRY",
+      "obEntryQuality": "HIGH",
+      "smcData": {
+        "session": {
+          "sessionName": "NEW_YORK",
+          "confidenceBoost": 5
+        },
+        "volatility": {
+          "volatilityLevel": "LOW",
+          "atr": 45.766842105265056,
+          "confidenceBoost": -5
+        },
+        "trend": {
+          "trendType": "BULLISH",
+          "confidenceBoost": 8
+        },
+        "marketStructure": {
+          "trend": "neutral",
+          "strength": 0,
+          "recentSwingHigh": {
+            "price": 90907.33,
+            "index": 34,
+            "timestamp": 1764353639999,
+            "broken": false
+          },
+          "recentSwingLow": {
+            "price": 90421.88,
+            "index": 26,
+            "timestamp": 1764353159999,
+            "broken": false
+          },
+          "bosDetected": false,
+          "chochDetected": false
+        },
+        "orderBlock": {
+          "id": "bear_ob_1764354501016_32",
+          "type": "bearish",
+          "high": 90848.05,
+          "low": 90689.85,
+          "timestamp": 1764353519999,
+          "candleIndex": 32,
+          "displacementSize": 283.87999999997555,
+          "freshnessStatus": "fresh",
+          "valid": true,
+          "testedCount": 0,
+          "qualityScore": 80
+        },
+        "fvg": {
+          "id": "bear_fvg_1764354501018_24",
+          "type": "bearish",
+          "top": 91876.69,
+          "bottom": 91499.72,
+          "size": 376.97000000000116,
+          "middleCandleIndex": 24,
+          "timestamp": 1764347099999,
+          "qualityScore": 80,
+          "fillStatus": "unfilled",
+          "testCount": 0,
+          "valid": true
+        },
+        "confluence": {
+          "totalScore": 9,
+          "maxScore": 18,
+          "percentage": 50,
+          "qualityRating": "VERY GOOD",
+          "factorsPresent": [
+            "High Quality OB",
+            "Quality FVG",
+            "Active Period",
+            "HTF Aligned",
+            "3:1 R:R"
+          ],
+          "positionSizeMultiplier": 0.75,
+          "tradeable": true,
+          "timestamp": 1764354501021
+        },
+        "fvgDetection": {
+          "bullishFVGs": [],
+          "bearishFVGs": [
+            {
+              "id": "bear_fvg_1764354501018_24",
+              "type": "bearish",
+              "top": 91876.69,
+              "bottom": 91499.72,
+              "size": 376.97000000000116,
+              "middleCandleIndex": 24,
+              "timestamp": 1764347099999,
+              "qualityScore": 80,
+              "fillStatus": "unfilled",
+              "testCount": 0,
+              "valid": true
+            },
+            {
+              "id": "bear_fvg_1764354501018_31",
+              "type": "bearish",
+              "top": 91258.93,
+              "bottom": 91065.14,
+              "size": 193.7899999999936,
+              "middleCandleIndex": 31,
+              "timestamp": 1764349199999,
+              "qualityScore": 50,
+              "fillStatus": "unfilled",
+              "testCount": 0,
+              "valid": true
+            }
+          ],
+          "totalDetected": 2,
+          "bestFVG": {
+            "id": "bear_fvg_1764354501018_24",
+            "type": "bearish",
+            "top": 91876.69,
+            "bottom": 91499.72,
+            "size": 376.97000000000116,
+            "middleCandleIndex": 24,
+            "timestamp": 1764347099999,
+            "qualityScore": 80,
+            "fillStatus": "unfilled",
+            "testCount": 0,
+            "valid": true
+          }
+        },
+        "higherTimeframeBias": {
+          "bias": "neutral",
+          "strength": 0,
+          "confidence": "low"
+        },
+        "obEntryType": "OB_ENTRY",
+        "obEntryQuality": "HIGH"
+      },
+      "entryOrderId": "PAPER_1764354503318",
+      "stopOrderId": "PAPER_SL_1764354503823",
+      "t1OrderId": "PAPER_TP_1764354504327",
+      "t2OrderId": "PAPER_TP_1764354504829",
+      "positionSize": 0.016523157535749494,
+      "riskAmount": 7.5,
+      "binanceSymbol": "BTCUSDT"
+    },
+    "eth": {
+      "symbol": "ETHUSDT",
+      "side": "BUY",
+      "entryPrice": 3053.96,
+      "stopLoss": "3023.42",
+      "takeProfit1": "3099.77",
+      "takeProfit2": "3145.58",
+      "quantity": "0.3274",
+      "risk": "10.00",
+      "confluenceScore": 9,
+      "direction": "BULLISH",
+      "status": "ACTIVE",
+      "timestamp": 1764358159663,
+      "asset": "eth",
+      "entryOrderId": "PAPER_1764358159665"
+    }
+  },
+  "performance": {
+    "totalTrades": 3,
+    "winners": 0,
+    "losers": 2,
+    "breakevenTrades": 1,
+    "totalProfit": -491.91999999999643,
+    "winRate": 0,
+    "profitFactor": 0,
+    "avgWin": 0,
+    "avgLoss": 245.95999999999822,
+    "breakevenRate": 33.33333333333333
+  },
+  "patterns": {
+    "BEARISH_4_RANGING_EXTREME": {
+      "wins": 20,
+      "losses": 46,
+      "breakevenTrades": 11,
+      "weight": 0.25
+    },
+    "BEARISH_7_RANGING_EXTREME": {
+      "wins": 12,
+      "losses": 30,
+      "breakevenTrades": 7,
+      "weight": 0.2
+    },
+    "BEARISH_9_RANGING_EXTREME": {
+      "wins": 2,
+      "losses": 2,
+      "breakevenTrades": 0,
+      "weight": 0.9000000000000001
+    },
+    "BEARISH_5_RANGING_EXTREME": {
+      "wins": 14,
+      "losses": 23,
+      "breakevenTrades": 8,
+      "weight": 0.6500000000000001
+    },
+    "BEARISH_6_RANGING_EXTREME": {
+      "wins": 7,
+      "losses": 12,
+      "breakevenTrades": 6,
+      "weight": 0.9000000000000002
+    },
+    "BEARISH_6_RANGING_LOW": {
+      "wins": 1,
+      "losses": 6,
+      "breakevenTrades": 2,
+      "weight": 0.25
+    },
+    "BEARISH_7_RANGING_LOW": {
+      "wins": 8,
+      "losses": 19,
+      "breakevenTrades": 6,
+      "weight": 0.7000000000000001
+    },
+    "BULLISH_10_RANGING_NORMAL": {
+      "wins": 0,
+      "losses": 1,
+      "breakevenTrades": 0,
+      "weight": 0.8
+    },
+    "BULLISH_8_RANGING_EXTREME": {
+      "wins": 1,
+      "losses": 0,
+      "breakevenTrades": 0,
+      "weight": 1.15
+    },
+    "BULLISH_5_RANGING_EXTREME": {
+      "wins": 7,
+      "losses": 7,
+      "breakevenTrades": 2,
+      "weight": 0.8500000000000001
+    },
+    "BULLISH_4_RANGING_EXTREME": {
+      "wins": 4,
+      "losses": 13,
+      "breakevenTrades": 6,
+      "weight": 0.2
+    },
+    "BULLISH_7_RANGING_EXTREME": {
+      "wins": 4,
+      "losses": 1,
+      "breakevenTrades": 1,
+      "weight": 1.45
+    },
+    "BULLISH_6_RANGING_EXTREME": {
+      "wins": 0,
+      "losses": 2,
+      "breakevenTrades": 2,
+      "weight": 0.7000000000000002
+    },
+    "BULLISH_4_RANGING_HIGH": {
+      "wins": 1,
+      "losses": 3,
+      "breakevenTrades": 0,
+      "weight": 0.55
+    },
+    "BULLISH_7_RANGING_HIGH": {
+      "wins": 1,
+      "losses": 3,
+      "breakevenTrades": 4,
+      "weight": 0.7500000000000002
+    },
+    "BULLISH_5_RANGING_LOW": {
+      "wins": 3,
+      "losses": 12,
+      "breakevenTrades": 4,
+      "weight": 0.2
+    },
+    "BULLISH_8_RANGING_LOW": {
+      "wins": 4,
+      "losses": 7,
+      "breakevenTrades": 5,
+      "weight": 0.4500000000000002
+    },
+    "BEARISH_6_RANGING_NORMAL": {
+      "wins": 1,
+      "losses": 6,
+      "breakevenTrades": 0,
+      "weight": 0.2
+    },
+    "BULLISH_6_RANGING_HIGH": {
+      "wins": 1,
+      "losses": 0,
+      "breakevenTrades": 0,
+      "weight": 1.15
+    },
+    "BULLISH_7_RANGING_LOW": {
+      "wins": 6,
+      "losses": 25,
+      "breakevenTrades": 5,
+      "weight": 0.2
+    },
+    "BULLISH_9_RANGING_LOW": {
+      "wins": 2,
+      "losses": 5,
+      "breakevenTrades": 2,
+      "weight": 0.4000000000000001
+    },
+    "BEARISH_10_RANGING_LOW": {
+      "wins": 6,
+      "losses": 11,
+      "breakevenTrades": 2,
+      "weight": 0.2
+    },
+    "BULLISH_7_RANGING_NORMAL": {
+      "wins": 1,
+      "losses": 3,
+      "breakevenTrades": 3,
+      "weight": 0.7000000000000002
+    },
+    "BEARISH_10_RANGING_EXTREME": {
+      "wins": 1,
+      "losses": 0,
+      "breakevenTrades": 0,
+      "weight": 1.15
+    },
+    "BEARISH_7_RANGING_HIGH": {
+      "wins": 3,
+      "losses": 0,
+      "breakevenTrades": 0,
+      "weight": 1.4499999999999997
+    },
+    "BEARISH_7_RANGING_NORMAL": {
+      "wins": 2,
+      "losses": 12,
+      "breakevenTrades": 1,
+      "weight": 0.2
+    },
+    "BULLISH_9_RANGING_EXTREME": {
+      "wins": 1,
+      "losses": 0,
+      "breakevenTrades": 0,
+      "weight": 1.15
+    },
+    "BEARISH_5_RANGING_HIGH": {
+      "wins": 0,
+      "losses": 3,
+      "breakevenTrades": 1,
+      "weight": 0.4500000000000001
+    },
+    "BEARISH_5_RANGING_NORMAL": {
+      "wins": 1,
+      "losses": 5,
+      "breakevenTrades": 2,
+      "weight": 0.2500000000000001
+    },
+    "BEARISH_4_RANGING_LOW": {
+      "wins": 0,
+      "losses": 3,
+      "breakevenTrades": 2,
+      "weight": 0.5000000000000002
+    },
+    "BULLISH_10_RANGING_EXTREME": {
+      "wins": 0,
+      "losses": 1,
+      "breakevenTrades": 0,
+      "weight": 0.8
+    },
+    "BULLISH_5_RANGING_NORMAL": {
+      "wins": 0,
+      "losses": 1,
+      "breakevenTrades": 1,
+      "weight": 0.8500000000000001
+    },
+    "BULLISH_9_RANGING_NORMAL": {
+      "wins": 0,
+      "losses": 1,
+      "breakevenTrades": 0,
+      "weight": 0.8
+    },
+    "BEARISH_4_RANGING_NORMAL": {
+      "wins": 1,
+      "losses": 1,
+      "breakevenTrades": 2,
+      "weight": 1.05
+    },
+    "BEARISH_10_RANGING_NORMAL": {
+      "wins": 1,
+      "losses": 1,
+      "breakevenTrades": 0,
+      "weight": 0.9500000000000001
+    },
+    "BEARISH_4_RANGING_HIGH": {
+      "wins": 2,
+      "losses": 1,
+      "breakevenTrades": 0,
+      "weight": 1.1
+    },
+    "BEARISH_9_RANGING_LOW": {
+      "wins": 7,
+      "losses": 13,
+      "breakevenTrades": 2,
+      "weight": 0.2
+    },
+    "BULLISH_10_RANGING_LOW": {
+      "wins": 2,
+      "losses": 9,
+      "breakevenTrades": 2,
+      "weight": 0.4
+    },
+    "BEARISH_10_RANGING_HIGH": {
+      "wins": 1,
+      "losses": 0,
+      "breakevenTrades": 0,
+      "weight": 1.15
+    },
+    "BEARISH_6_RANGING_HIGH": {
+      "wins": 3,
+      "losses": 0,
+      "breakevenTrades": 1,
+      "weight": 1.4999999999999998
+    },
+    "BEARISH_5_RANGING_LOW": {
+      "wins": 2,
+      "losses": 6,
+      "breakevenTrades": 0,
+      "weight": 0.35
+    },
+    "BEARISH_8_RANGING_NORMAL": {
+      "wins": 0,
+      "losses": 1,
+      "breakevenTrades": 0,
+      "weight": 0.8
+    },
+    "BULLISH_4_RANGING_NORMAL": {
+      "wins": 0,
+      "losses": 1,
+      "breakevenTrades": 0,
+      "weight": 0.8
+    },
+    "BEARISH_8_RANGING_EXTREME": {
+      "wins": 0,
+      "losses": 1,
+      "breakevenTrades": 1,
+      "weight": 0.8500000000000001
+    },
+    "BEARISH_8_RANGING_LOW": {
+      "wins": 2,
+      "losses": 11,
+      "breakevenTrades": 3,
+      "weight": 0.2
+    },
+    "BULLISH_6_RANGING_LOW": {
+      "wins": 4,
+      "losses": 7,
+      "breakevenTrades": 1,
+      "weight": 0.5
+    },
+    "BEARISH_8_RANGING_HIGH": {
+      "wins": 1,
+      "losses": 0,
+      "breakevenTrades": 0,
+      "weight": 1.15
+    },
+    "BEARISH_11_RANGING_LOW": {
+      "wins": 3,
+      "losses": 8,
+      "breakevenTrades": 4,
+      "weight": 0.2
+    },
+    "BULLISH_11_RANGING_LOW": {
+      "wins": 2,
+      "losses": 9,
+      "breakevenTrades": 1,
+      "weight": 0.2
+    },
+    "BEARISH_13_RANGING_LOW": {
+      "wins": 5,
+      "losses": 2,
+      "breakevenTrades": 1,
+      "weight": 1.3999999999999997
+    },
+    "BEARISH_14_RANGING_LOW": {
+      "wins": 2,
+      "losses": 4,
+      "breakevenTrades": 2,
+      "weight": 0.6000000000000001
+    },
+    "BEARISH_12_RANGING_LOW": {
+      "wins": 1,
+      "losses": 5,
+      "breakevenTrades": 4,
+      "weight": 0.4
+    },
+    "BULLISH_12_RANGING_LOW": {
+      "wins": 1,
+      "losses": 3,
+      "breakevenTrades": 1,
+      "weight": 0.6000000000000001
+    },
+    "BULLISH_4_RANGING_LOW": {
+      "wins": 5,
+      "losses": 2,
+      "breakevenTrades": 1,
+      "weight": 1.3999999999999997
+    },
+    "BULLISH_13_RANGING_LOW": {
+      "wins": 0,
+      "losses": 1,
+      "breakevenTrades": 0,
+      "weight": 0.8
+    }
+  },
+  "timestamp": 1764359829012
+}

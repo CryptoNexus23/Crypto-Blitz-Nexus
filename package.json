@@ -1,0 +1,31 @@
+{
+  "name": "nexus-4.0-exit-engine",
+  "version": "4.0.0",
+  "description": "Nexus 4.0 Autonomous Trade Exit Engine",
+  "main": "nexus_exit_engine.js",
+  "scripts": {
+    "start": "node nexus_exit_engine.js",
+    "start-api": "node nexus_api_server.js",
+    "pm2:exit": "pm2 start nexus_exit_engine.js --name nexus-exit-engine --log /opt/nexus/logs/pm2-exit.log",
+    "pm2:api": "pm2 start nexus_api_server.js --name nexus-api-server --log /opt/nexus/logs/pm2-api.log",
+    "pm2:trading": "pm2 start nexus_trading_engine.js --name nexus-trading-engine --log /opt/nexus/logs/pm2-trading.log",
+    "pm2:stop": "pm2 stop nexus-exit-engine nexus-api-server nexus-trading-engine",
+    "pm2:restart": "pm2 restart nexus-exit-engine nexus-api-server nexus-trading-engine",
+    "pm2:all": "pm2 start nexus_api_server.js --name nexus-api-server && pm2 start nexus_trading_engine.js --name nexus-trading-engine && pm2 start nexus_exit_engine.js --name nexus-exit-engine"
+  },
+  "keywords": [
+    "crypto",
+    "trading",
+    "bot",
+    "autonomous"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "ws": "^8.14.2"
+  }
+}
+

@@ -1,0 +1,4112 @@
+#!/usr/bin/env node
+/**
+ * NEXUS 4.0 - COMPLETE VPS TRADING ENGINE
+ * 
+ * ALL trading logic extracted from browser and running on VPS.
+ * This is the REAL trading engine - runs 24/7 independently.
+ * 
+ * Run: pm2 start nexus_vps_trading_engine.js --name nexus-trading
+ * 
+ * Dependencies:
+ *   npm install ws express axios
+ */
+
+const WebSocket = require('ws');
+const express = require('express');
+const axios = require('axios');
+const fs = require('fs').promises;
+const path = require('path');
+const crypto = require('crypto');
+
+// ============================================
+// PAPER TRADING STATE
+// ============================================
+let paperBalance = 1000;  // Starting balance $1000
+let paperPositions = [];   // Array to track open positions
+let paperTrades = [];      // Array to track all trades
+
+// ============================================================================
+// ENVIRONMENT SETUP REQUIRED:
+// Export your Binance API credentials before running:
+//   export BINANCE_API_KEY="your_api_key_here"
+//   export BINANCE_SECRET="your_secret_key_here"
+// 
+// NOTE: This code is configured for demo.binance.com (LIVE demo environment)
+//       Uses LIVE endpoints (fapi.binance.com), not testnet endpoints
+// ============================================================================
+
+// Try to use cors package if available, otherwise use manual headers
+let corsMiddleware;
+try {
+    const cors = require('cors');
+    corsMiddleware = cors({
+        origin: '*',
+        methods: ['GET', 'POST', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization'],
+        credentials: false
+    });
+} catch (e) {
+    // Fallback to manual CORS if cors package not installed
+    corsMiddleware = (req, res, next) => {
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        if (req.method === 'OPTIONS') {
+            return res.sendStatus(200);
+        }
+        next();
+    };
+}
+
+// ============================================
+// CONFIGURATION
+// ============================================
+const CONFIG = {
+    API_PORT: 3001,
+    DATA_FILE: '/opt/nexus/data/trades.json',
+    LOG_FILE: '/opt/nexus/logs/trading_engine.log',
+    SCAN_INTERVAL_MS: 3000,
+    MIN_BTC_POSITION: 0.0001,
+    MIN_ETH_POSITION: 0.01,
+    
+    // Account Management
+    STARTING_CAPITAL: 10000,
+    RISK_PERCENT_BASE: 1.0,  // 1% base risk
+    
+    // Confluence Risk Adjustments (added to base)
+    CONFLUENCE_RISK: {
+        EXCEPTIONAL: 0.25,   // 1% + 0.25% = 1.25%
+        EXCELLENT: 0.0,      // 1% + 0% = 1.0%
+        'VERY GOOD': -0.25,  // 1% - 0.25% = 0.75%
+        GOOD: -0.5           // 1% - 0.5% = 0.5%
+    },
+    
+    // Risk Caps
+    MAX_RISK_PERCENT: 2.0,
+    MIN_RISK_PERCENT: 0.5,
+    
+    // Daily Protection
+    DAILY_LOSS_LIMIT: 1000,  // $1,000 = 10% of starting capital
+    MAX_OPEN_POSITIONS: 2,
+    
+    // Binance Futures API
+    // PAPER TRADING MODE: Using public mainnet endpoints (no auth needed) for real market data
+    // All trades are simulated locally - no actual orders placed
+    BINANCE: {
+        API_KEY: process.env.BINANCE_API_KEY || '',  // Not needed for paper trading
+        API_SECRET: process.env.BINANCE_SECRET || '',  // Not needed for paper trading
+        FUTURES_BASE_URL: 'https://fapi.binance.com',  // Public Mainnet (no auth needed)
+        FUTURES_API: 'https://fapi.binance.com/fapi/v1',  // Public Mainnet (no auth needed)
+        WS_FUTURES: 'wss://fstream.binance.com/ws',  // Public Mainnet WebSocket
+        PAPER_TRADING_MODE: true  // Enable paper trading mode
+    },
+    
+    // Trading Settings
+    LEVERAGE: 5,
+    MARGIN_TYPE: 'ISOLATED'  // or 'CROSSED'
+};
+
+// ============================================================================
+// RATE LIMITING SYSTEM - Prevent 429 errors
+// ============================================================================
+
+// Rate limiter: Max 50 requests per minute (Binance limit is 1200/min, but we're conservative)
+const RATE_LIMIT = {
+    maxRequestsPerMinute: 50,
+    minIntervalMs: 1200, // 60 seconds / 50 requests = 1.2 seconds between requests
+    lastRequestTime: 0,
+    requestQueue: []
+};
+
+// Rate limit helper - ensures minimum time between requests
+async function rateLimitWait() {
+    const now = Date.now();
+    const timeSinceLastRequest = now - RATE_LIMIT.lastRequestTime;
+    const waitTime = Math.max(0, RATE_LIMIT.minIntervalMs - timeSinceLastRequest);
+    
+    if (waitTime > 0) {
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    
+    RATE_LIMIT.lastRequestTime = Date.now();
+}
+
+// Safe API call wrapper with exponential backoff for rate limit errors
+async function safeAPICall(apiCall, maxRetries = 3, baseDelay = 2000) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            // Apply rate limiting before each request
+            await rateLimitWait();
+            
+            // Make the API call
+            const result = await apiCall();
+            return result;
+            
+        } catch (error) {
+            // Check if it's a rate limit error (429 or -1003)
+            const isRateLimit = error.response?.status === 429 || 
+                               error.response?.data?.code === -1003 ||
+                               error.response?.data?.code === -1027; // IP rate limit
+            
+            if (isRateLimit && attempt < maxRetries - 1) {
+                // Exponential backoff: 2s, 4s, 8s
+                const waitTime = baseDelay * Math.pow(2, attempt);
+                logger.warn(`[RATE LIMIT] Hit rate limit (attempt ${attempt + 1}/${maxRetries}), waiting ${waitTime}ms...`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+                continue; // Retry
+            } else if (isRateLimit) {
+                // Max retries reached
+                logger.error(`[RATE LIMIT] ❌ Rate limit exceeded after ${maxRetries} attempts`);
+                logger.error(`[RATE LIMIT] Please wait 15 minutes before restarting Nexus`);
+                throw error;
+            } else {
+                // Not a rate limit error - rethrow immediately
+                throw error;
+            }
+        }
+    }
+    
+    return null;
+}
+
+const SYMBOLS = { btc: 'BTCUSDT', eth: 'ETHUSDT' };
+const KLINE_INTERVALS = ['1m', '5m', '15m'];
+const WS_URL = 'wss://stream.binance.com:9443/stream?streams=' +
+    'btcusdt@ticker/ethusdt@ticker/' +
+    'btcusdt@kline_1m/ethusdt@kline_1m/' +
+    'btcusdt@kline_5m/ethusdt@kline_5m/' +
+    'btcusdt@kline_15m/ethusdt@kline_15m';
+const BINANCE_API_URL = 'https://api.binance.com/api/v3/ticker/price';
+const BINANCE_KLINE_URL = 'https://api.binance.com/api/v3/klines';
+const MAX_CANDLES_STORED = 300;
+
+const RISK_CONFIGS = {
+    conservative: { stopPct: 0.005, target1: 1.5, target2: 2.5, minConfidence: 8 },
+    aggressive: { stopPct: 0.003, target1: 1.0, target2: 2.0, minConfidence: 6 }
+};
+
+// Account State
+let accountState = {
+    startingCapital: 10000,
+    currentEquity: 10000,
+    peakEquity: 10000,
+    drawdownPercent: 0,
+    dailyPnL: 0,
+    dailyStartEquity: 10000,
+    dailyLossLimitHit: false,
+    openPositions: [],
+    lastBalanceUpdate: Date.now(),
+    lastResetDate: new Date().toDateString()
+};
+
+// Position Mode and Symbol Precision Cache
+let positionMode = 'UNKNOWN'; // 'HEDGE' or 'ONE_WAY'
+let symbolPrecision = {
+    'BTCUSDT': { minQty: 0.001, stepSize: 0.001, pricePrecision: 2 },
+    'ETHUSDT': { minQty: 0.01, stepSize: 0.01, pricePrecision: 2 }
+};
+
+// ORDER BLOCK CONFIGURATION
+const OB_CONFIG = {
+    // Percentage-based tolerance (0.10% = moderate)
+    CLOSE_TOLERANCE_PCT: 0.10,   // Within 0.10% = "close to OB"
+    FAR_TOLERANCE_PCT: 0.30,     // Beyond 0.30% = "far from OB"
+    
+    // Strategy mode
+    MODE: 'HYBRID',  // HYBRID | STRICT | MOMENTUM_ONLY
+    
+    // Logging
+    VERBOSE_LOGGING: true
+};
+
+// ============================================
+// LOGGING
+// ============================================
+async function log(level, message, data = null) {
+    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const logEntry = `[${timestamp}] [${level}] ${message}${data ? ' ' + JSON.stringify(data) : ''}`;
+    console.log(logEntry);
+    try {
+        await fs.appendFile(CONFIG.LOG_FILE, logEntry + '\n', 'utf8');
+    } catch (err) {}
+}
+
+const logger = {
+    info: (msg, data) => log('INFO', msg, data),
+    warn: (msg, data) => log('WARN', msg, data),
+    error: (msg, data) => log('ERROR', msg, data),
+    success: (msg, data) => log('SUCCESS', msg, data)
+};
+
+// ============================================================================
+// BINANCE API UTILITIES
+// ============================================================================
+function signRequest(queryString) {
+    if (!CONFIG.BINANCE.API_SECRET) {
+        throw new Error('BINANCE_SECRET not set. Use: export BINANCE_SECRET="your_secret_key"');
+    }
+    if (!CONFIG.BINANCE.API_KEY) {
+        throw new Error('BINANCE_API_KEY not set. Use: export BINANCE_API_KEY="your_api_key"');
+    }
+    return crypto
+        .createHmac('sha256', CONFIG.BINANCE.API_SECRET)
+        .update(queryString)
+        .digest('hex');
+}
+
+async function getAccountBalance() {
+    // Paper trading mode - return simulated balance
+    if (CONFIG.BINANCE.PAPER_TRADING_MODE) {
+        return {
+            totalWalletBalance: paperBalance.toString(),
+            totalMarginBalance: paperBalance.toString(),
+            totalUnrealizedProfit: '0',
+            availableBalance: paperBalance.toString(),
+            positions: []
+        };
+    }
+    
+    // Original API call code (kept for reference, but not used in paper trading mode)
+    try {
+        const timestamp = Date.now();
+        // Build query string with timestamp and recvWindow (allows 5s time drift)
+        const queryString = `timestamp=${timestamp}&recvWindow=5000`;
+        // Sign the query string (signature is NOT included in the string being signed)
+        const signature = signRequest(queryString);
+        
+        // Wrap API call with rate limiting and backoff
+        const response = await safeAPICall(async () => {
+            // Binance Futures /account endpoint requires GET method and v2 API
+            // NOTE: /fapi/v1/account was deprecated in July 2023, must use /fapi/v2/account
+            // CRITICAL: The query string in the URL must match exactly what was signed
+            // (signature parameter is added separately, not included in signing)
+            const accountUrl = `${CONFIG.BINANCE.FUTURES_BASE_URL}/fapi/v2/account?${queryString}&signature=${signature}`;
+            return await axios.get(
+                accountUrl,
+                {
+                    headers: { 
+                        'X-MBX-APIKEY': CONFIG.BINANCE.API_KEY,
+                        'Content-Type': 'application/json'
+                    },
+                    validateStatus: function (status) {
+                        return status < 500; // Don't throw for 4xx errors
+                    },
+                    timeout: 10000
+                }
+            );
+        });
+        
+        if (!response) {
+            logger.error(`[API] Account balance request failed - rate limit or network error`);
+            return null;
+        }
+        
+        // Log response status and headers for debugging
+        // Accept any 2xx status code (200, 201, 202, etc.)
+        if (response.status < 200 || response.status >= 300) {
+            logger.error(`[API] Account balance request failed with status ${response.status}:`, response.data);
+            return null;
+        }
+        
+        // Handle string responses
+        let responseData = response.data;
+        if (typeof responseData === 'string') {
+            // Log the actual string to see what we're getting
+            logger.info(`[API] Response is string (length: ${responseData.length}):`, responseData.substring(0, 200));
+            
+            // Try to parse as JSON
+            try {
+                responseData = JSON.parse(responseData);
+            } catch (e) {
+                // If it's not JSON, check if it's an error message
+                if (responseData.includes('error') || responseData.includes('Error') || responseData.includes('invalid')) {
+                    logger.error(`[API] Error response from Binance: ${responseData}`);
+                } else {
+                    logger.warn(`[API] Response is string but not valid JSON. First 200 chars: ${responseData.substring(0, 200)}`);
+                }
+                return null;
+            }
+        }
+        
+        // Check if response is valid (not empty)
+        if (!responseData || Object.keys(responseData).length === 0) {
+            logger.warn('[API] Empty response from Binance API');
+            // Log the actual response for debugging
+            logger.info('[API] Response type:', typeof response.data, 'Response:', response.data);
+            return null;
+        }
+        
+        // Debug: Log response structure if assets is missing
+        if (!responseData.assets && !responseData.totalMarginBalance) {
+            logger.warn('[API] Response structure unexpected:', {
+                hasAssets: !!responseData.assets,
+                hasTotalMarginBalance: !!responseData.totalMarginBalance,
+                keys: Object.keys(responseData).slice(0, 10),
+                fullResponse: JSON.stringify(responseData).substring(0, 200)
+            });
+        }
+        
+        // Handle different response structures
+        let usdtAsset = null;
+        if (responseData.assets && Array.isArray(responseData.assets)) {
+            usdtAsset = responseData.assets.find(a => a.asset === 'USDT');
+        } else if (responseData.assets) {
+            // If assets is an object instead of array
+            usdtAsset = responseData.assets.USDT || responseData.assets.find?.(a => a.asset === 'USDT');
+        }
+        
+        // If no USDT asset found, try to get balance from totalMarginBalance
+        if (!usdtAsset) {
+            // Only use totalMarginBalance if it's actually a valid number
+            const totalMargin = parseFloat(responseData.totalMarginBalance || 0);
+            
+            // CRITICAL: If balance is 0, this is a real $0 balance, not an API error
+            if (totalMargin === 0 && responseData.totalMarginBalance === 0) {
+                logger.error('[API] ⚠️  Account balance is $0.00 - Account needs funding!');
+                logger.error('[API] Go to: https://demo.binance.com to fund your demo account');
+                // Return the $0 balance so system knows it's real
+                return {
+                    totalWalletBalance: 0,
+                    availableBalance: 0,
+                    unrealizedProfit: parseFloat(responseData.totalUnrealizedProfit || 0),
+                    totalMarginBalance: 0,
+                    positions: responseData.positions || []
+                };
+            }
+            
+            if (totalMargin <= 0 && !responseData.totalMarginBalance) {
+                logger.warn('[API] Invalid balance data - API may be returning empty response');
+                logger.info('[API] Full response data:', JSON.stringify(responseData).substring(0, 500));
+                return null; // Return null to use cached equity
+            }
+            
+            logger.warn('[API] USDT asset not found, using totalMarginBalance');
+            return {
+                totalWalletBalance: totalMargin,
+                availableBalance: parseFloat(responseData.availableBalance || responseData.totalMarginBalance || 0),
+                unrealizedProfit: parseFloat(responseData.totalUnrealizedProfit || 0),
+                totalMarginBalance: totalMargin,
+                positions: responseData.positions || []
+            };
+        }
+        
+        const walletBalance = parseFloat(usdtAsset.walletBalance || 0);
+        const marginBalance = parseFloat(responseData.totalMarginBalance || 0);
+        
+        // CRITICAL: Log if balance is $0
+        if (walletBalance === 0 && marginBalance === 0) {
+            logger.error('[API] ⚠️  Account balance is $0.00 - Demo account needs funding!');
+            logger.error('[API] Go to: https://demo.binance.com to fund your account');
+        }
+        
+        return {
+            totalWalletBalance: walletBalance,
+            availableBalance: parseFloat(usdtAsset.availableBalance || 0),
+            unrealizedProfit: parseFloat(responseData.totalUnrealizedProfit || 0),
+            totalMarginBalance: marginBalance,
+            positions: responseData.positions || []
+        };
+    } catch (error) {
+        // Comprehensive error logging for account balance
+        logger.error('[API] ❌ Error fetching balance:', {
+            error: error.message,
+            errorType: error.constructor.name
+        });
+        
+        if (error.response) {
+            logger.error('[API] HTTP Error Response:', {
+                status: error.response.status,
+                statusText: error.response.statusText,
+                data: error.response.data,
+                dataType: typeof error.response.data
+            });
+            
+            // Check for Binance error codes
+            if (error.response.data && typeof error.response.data === 'object') {
+                if (error.response.data.code) {
+                    logger.error(`[API] Binance Error Code: ${error.response.data.code}`);
+                    logger.error(`[API] Binance Error Message: ${error.response.data.msg}`);
+                }
+            } else if (typeof error.response.data === 'string') {
+                logger.error(`[API] Error response string: ${error.response.data.substring(0, 500)}`);
+            }
+        } else if (error.request) {
+            logger.error('[API] No response received from Binance API');
+        }
+        
+        return null;
+    }
+}
+
+async function updateAccountEquity() {
+    // Paper trading mode - just log the balance
+    if (CONFIG.BINANCE.PAPER_TRADING_MODE) {
+        logger.info(`[PAPER TRADING] Current Balance: $${paperBalance.toFixed(2)}`);
+        accountState.currentEquity = paperBalance;
+        return paperBalance;
+    }
+    
+    const balance = await getAccountBalance();
+    if (!balance) {
+        logger.info('[ACCOUNT] Using cached equity (API unavailable)');
+        // Don't update anything if API fails - keep using cached values
+        return;
+    }
+    
+    // Validate balance is reasonable (not 0 or negative unless it's actually 0)
+    const newEquity = balance.totalMarginBalance;
+    
+    // CRITICAL: Detect and report $0 balance
+    if (newEquity === 0) {
+        logger.error('[ACCOUNT] ⚠️  ACCOUNT BALANCE IS $0.00');
+        logger.error('[ACCOUNT] This is a REAL $0 balance, not an API error');
+        logger.error('[ACCOUNT] Go to: https://demo.binance.com to fund your demo account');
+        logger.error('[ACCOUNT] Trading will be disabled until account is funded');
+        // Update equity to 0 so canTakeNewTrade() will block orders
+        accountState.currentEquity = 0;
+        accountState.dailyStartEquity = 0;
+        return;
+    }
+    
+    if (newEquity < 0) {
+        logger.warn('[ACCOUNT] Invalid equity value from API - using cached value');
+        return;
+    }
+    
+    // Only update if we got a valid balance
+    // CRITICAL: Ensure currentEquity is always a NUMBER, not a string
+    const previousEquity = typeof accountState.currentEquity === 'number' ? accountState.currentEquity : parseFloat(accountState.currentEquity) || 0;
+    const numericEquity = typeof newEquity === 'number' ? newEquity : parseFloat(newEquity) || 0;
+    accountState.currentEquity = numericEquity;
+    
+    // Update peak and drawdown
+    if (accountState.currentEquity > accountState.peakEquity) {
+        accountState.peakEquity = accountState.currentEquity;
+    }
+    
+    // Prevent division by zero
+    if (accountState.peakEquity > 0) {
+        accountState.drawdownPercent = 
+            ((accountState.peakEquity - accountState.currentEquity) / accountState.peakEquity) * 100;
+    } else {
+        accountState.drawdownPercent = 0;
+    }
+    
+    // Return the numeric equity value
+    return numericEquity;
+    
+    // Calculate daily P&L and check reset
+    const currentDate = new Date().toDateString();
+    if (currentDate !== accountState.lastResetDate) {
+        // New day - reset daily tracking
+        accountState.dailyStartEquity = accountState.currentEquity;
+        accountState.dailyPnL = 0;
+        accountState.dailyLossLimitHit = false;
+        accountState.lastResetDate = currentDate;
+        logger.info('[ACCOUNT] New day - daily limits reset');
+    } else {
+        // Only update daily P&L if we have a valid starting equity
+        if (accountState.dailyStartEquity > 0) {
+            accountState.dailyPnL = accountState.currentEquity - accountState.dailyStartEquity;
+        } else {
+            // If dailyStartEquity is 0 or invalid, set it to current equity
+            accountState.dailyStartEquity = accountState.currentEquity;
+            accountState.dailyPnL = 0;
+        }
+    }
+    
+    accountState.lastBalanceUpdate = Date.now();
+    
+    const equity = Number(accountState.currentEquity) || 0;
+    const dailyPnL = Number(accountState.dailyPnL) || 0;
+    const drawdown = Number(accountState.drawdownPercent) || 0;
+    logger.info(`[ACCOUNT] Equity: $${equity.toFixed(2)} | Daily P&L: $${dailyPnL.toFixed(2)} | DD: ${drawdown.toFixed(2)}%`);
+    
+    // Check daily loss limit - but only if we have valid data
+    // Reset daily loss limit if it was triggered by invalid data (equity went from valid to 0)
+    if (previousEquity > 0 && newEquity === 0) {
+        logger.warn('[ACCOUNT] Equity dropped to $0 - likely API issue. Resetting daily loss limit.');
+        accountState.dailyLossLimitHit = false;
+        accountState.dailyStartEquity = CONFIG.STARTING_CAPITAL; // Reset to starting capital
+        accountState.dailyPnL = 0;
+        return; // Don't check loss limit on invalid data
+    }
+    
+    // Only check daily loss limit if we have valid equity data
+    if (accountState.currentEquity > 0 && accountState.dailyStartEquity > 0) {
+        if (accountState.dailyPnL <= -CONFIG.DAILY_LOSS_LIMIT) {
+            if (!accountState.dailyLossLimitHit) {
+                accountState.dailyLossLimitHit = true;
+                logger.error(`[RISK] ⛔ DAILY LOSS LIMIT HIT: $${accountState.dailyPnL.toFixed(2)} / -$${CONFIG.DAILY_LOSS_LIMIT}. Trading stopped until tomorrow.`);
+            }
+        }
+    }
+}
+
+async function setLeverage(symbol, leverage) {
+    try {
+        const timestamp = Date.now();
+        const queryString = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp}`;
+        const signature = signRequest(queryString);
+        
+        await safeAPICall(async () => {
+            return await axios.post(
+                `${CONFIG.BINANCE.FUTURES_API}/leverage?${queryString}&signature=${signature}`,
+                null,
+                {
+                    headers: { 'X-MBX-APIKEY': CONFIG.BINANCE.API_KEY },
+                    timeout: 5000
+                }
+            );
+        });
+        
+        logger.info(`[API] Leverage set to ${leverage}x for ${symbol}`);
+        return true;
+    } catch (error) {
+        logger.error(`[API] Error setting leverage for ${symbol}:`, error.response?.data || error.message);
+        return false;
+    }
+}
+
+async function setMarginType(symbol, marginType) {
+    try {
+        const timestamp = Date.now();
+        const queryString = `symbol=${symbol}&marginType=${marginType}&timestamp=${timestamp}`;
+        const signature = signRequest(queryString);
+        
+        await safeAPICall(async () => {
+            return await axios.post(
+                `${CONFIG.BINANCE.FUTURES_API}/marginType?${queryString}&signature=${signature}`,
+                null,
+                {
+                    headers: { 'X-MBX-APIKEY': CONFIG.BINANCE.API_KEY },
+                    timeout: 5000
+                }
+            );
+        });
+        
+        logger.info(`[API] Margin type set to ${marginType} for ${symbol}`);
+        return true;
+    } catch (error) {
+        // Error 4046 means margin type already set - not a real error
+        if (error.response?.data?.code === -4046) {
+            logger.info(`[API] ${symbol} already in ${marginType} mode`);
+            return true;
+        }
+        logger.error(`[API] Error setting margin type for ${symbol}:`, error.response?.data || error.message);
+        return false;
+    }
+}
+
+// ============================================================================
+// POSITION MODE AND SYMBOL PRECISION
+// ============================================================================
+
+async function checkPositionMode() {
+    try {
+        const timestamp = Date.now();
+        const queryString = `timestamp=${timestamp}`;
+        const signature = signRequest(queryString);
+        
+        const response = await axios.get(
+            `${CONFIG.BINANCE.FUTURES_API}/positionSide/dual?timestamp=${timestamp}&signature=${signature}`,
+            {
+                headers: { 'X-MBX-APIKEY': CONFIG.BINANCE.API_KEY },
+                validateStatus: () => true
+            }
+        );
+        
+        if (response.status >= 200 && response.status < 300) {
+            const dualSide = response.data.dualSidePosition === true;
+            positionMode = dualSide ? 'HEDGE' : 'ONE_WAY';
+            
+            logger.info(`[CONFIG] ✅ Position Mode: ${positionMode}`, {
+                dualSide: dualSide,
+                canOpenBoth: dualSide ? 'YES (LONG and SHORT simultaneously)' : 'NO (one direction at a time)'
+            });
+            
+            return positionMode;
+        } else {
+            logger.warn(`[CONFIG] Could not determine position mode (status ${response.status}), defaulting to ONE_WAY`);
+            positionMode = 'ONE_WAY';
+            return positionMode;
+        }
+    } catch (error) {
+        logger.warn(`[CONFIG] Error checking position mode:`, error.message);
+        logger.warn(`[CONFIG] Defaulting to ONE_WAY mode`);
+        positionMode = 'ONE_WAY';
+        return positionMode;
+    }
+}
+
+async function getSymbolPrecision(symbol) {
+    try {
+        // Check cache first
+        if (symbolPrecision[symbol]) {
+            return symbolPrecision[symbol];
+        }
+        
+        // Fetch from exchange info
+        const response = await axios.get(
+            `${CONFIG.BINANCE.FUTURES_API}/exchangeInfo`,
+            {
+                validateStatus: () => true
+            }
+        );
+        
+        if (response.status >= 200 && response.status < 300 && response.data.symbols) {
+            const symbolInfo = response.data.symbols.find(s => s.symbol === symbol);
+            
+            if (symbolInfo) {
+                let minQty = 0.001;
+                let stepSize = 0.001;
+                let pricePrecision = 2;
+                
+                // Find LOT_SIZE filter
+                const lotSizeFilter = symbolInfo.filters?.find(f => f.filterType === 'LOT_SIZE');
+                if (lotSizeFilter) {
+                    minQty = parseFloat(lotSizeFilter.minQty);
+                    stepSize = parseFloat(lotSizeFilter.stepSize);
+                }
+                
+                // Find PRICE_FILTER for price precision
+                const priceFilter = symbolInfo.filters?.find(f => f.filterType === 'PRICE_FILTER');
+                if (priceFilter && priceFilter.tickSize) {
+                    const tickSize = parseFloat(priceFilter.tickSize);
+                    pricePrecision = Math.abs(Math.log10(tickSize));
+                }
+                
+                symbolPrecision[symbol] = { minQty, stepSize, pricePrecision };
+                
+                logger.info(`[SYMBOL] ${symbol} Precision:`, {
+                    minQty: minQty,
+                    stepSize: stepSize,
+                    pricePrecision: pricePrecision
+                });
+                
+                return symbolPrecision[symbol];
+            }
+        }
+        
+        // Fallback to defaults
+        const defaults = symbol === 'BTCUSDT' 
+            ? { minQty: 0.001, stepSize: 0.001, pricePrecision: 2 }
+            : { minQty: 0.01, stepSize: 0.01, pricePrecision: 2 };
+        
+        symbolPrecision[symbol] = defaults;
+        logger.warn(`[SYMBOL] Using default precision for ${symbol}:`, defaults);
+        return defaults;
+        
+    } catch (error) {
+        logger.error(`[SYMBOL] Error fetching precision for ${symbol}:`, error.message);
+        // Return defaults
+        const defaults = symbol === 'BTCUSDT' 
+            ? { minQty: 0.001, stepSize: 0.001, pricePrecision: 2 }
+            : { minQty: 0.01, stepSize: 0.01, pricePrecision: 2 };
+        symbolPrecision[symbol] = defaults;
+        return defaults;
+    }
+}
+
+function formatQuantity(quantity, symbol) {
+    // 🔴 BUG FIX: Ensure input is a number
+    let numQuantity;
+    if (typeof quantity === 'string') {
+        numQuantity = parseFloat(quantity);
+        if (isNaN(numQuantity)) {
+            logger.error(`[FORMAT] Invalid quantity string: "${quantity}"`);
+            return 0;
+        }
+    } else if (typeof quantity === 'number') {
+        numQuantity = quantity;
+    } else {
+        logger.error(`[FORMAT] Invalid quantity type: ${typeof quantity}`);
+        return 0;
+    }
+    
+    const precision = symbolPrecision[symbol] || (symbol === 'BTCUSDT' 
+        ? { stepSize: 0.001 } 
+        : { stepSize: 0.01 });
+    
+    const stepSize = precision.stepSize || (symbol === 'BTCUSDT' ? 0.001 : 0.01);
+    
+    // Round to step size
+    const steps = Math.floor(numQuantity / stepSize);
+    const rounded = steps * stepSize;
+    
+    // Format to appropriate decimal places
+    const decimals = stepSize >= 1 ? 0 : stepSize >= 0.1 ? 1 : stepSize >= 0.01 ? 2 : 3;
+    
+    // 🔴 BUG FIX: Ensure return value is always a number
+    const result = parseFloat(rounded.toFixed(decimals));
+    
+    if (typeof result !== 'number' || isNaN(result)) {
+        logger.error(`[FORMAT] formatQuantity returned invalid value: ${result} (type: ${typeof result})`);
+        return 0;
+    }
+    
+    return result;
+}
+
+async function verifyOrderOnBinance(symbol, orderId) {
+    try {
+        logger.info(`[ORDER VERIFY] Verifying order ${orderId} on Binance for ${symbol}...`);
+        
+        const timestamp = Date.now();
+        const queryString = `symbol=${symbol}&orderId=${orderId}&timestamp=${timestamp}`;
+        const signature = signRequest(queryString);
+        
+        const response = await safeAPICall(async () => {
+            return await axios.get(
+                `${CONFIG.BINANCE.FUTURES_API}/order?${queryString}&signature=${signature}`,
+                {
+                    headers: { 'X-MBX-APIKEY': CONFIG.BINANCE.API_KEY },
+                    validateStatus: () => true,
+                    timeout: 5000
+                }
+            );
+        });
+        
+        if (!response) {
+            logger.error(`[ORDER VERIFY] ❌ Verification failed - rate limit or network error`);
+            return null;
+        }
+        
+        if (response.status >= 200 && response.status < 300) {
+            logger.success(`[ORDER VERIFY] ✅ Order ${orderId} verified on Binance:`, {
+                status: response.data.status,
+                executedQty: response.data.executedQty,
+                avgPrice: response.data.avgPrice
+            });
+            return response.data;
+        } else {
+            logger.error(`[ORDER VERIFY] ❌ Order ${orderId} NOT found on Binance (status ${response.status})`);
+            logger.error(`[ORDER VERIFY] Response:`, response.data);
+            return null;
+        }
+    } catch (error) {
+        logger.error(`[ORDER VERIFY] ❌ Error verifying order ${orderId}:`, error.message);
+        return null;
+    }
+}
+
+// ============================================================================
+// Verify if orders actually went through even if response parsing fails
+// ============================================================================
+
+async function verifyOrderExecuted(symbol, orderId = null) {
+    try {
+        logger.info(`[ORDER VERIFY] 🔍 Checking if order executed for ${symbol}...`);
+        
+        const timestamp = Date.now();
+        let queryString;
+        
+        if (orderId) {
+            // Check specific order
+            queryString = `symbol=${symbol}&orderId=${orderId}&timestamp=${timestamp}`;
+        } else {
+            // Get recent orders (last 5)
+            queryString = `symbol=${symbol}&limit=5&timestamp=${timestamp}`;
+        }
+        
+        const signature = signRequest(queryString);
+        
+        const endpoint = orderId 
+            ? `${CONFIG.BINANCE.FUTURES_API}/order?${queryString}&signature=${signature}`
+            : `${CONFIG.BINANCE.FUTURES_API}/allOrders?${queryString}&signature=${signature}`;
+        
+        const response = await safeAPICall(async () => {
+            return await axios.get(endpoint, {
+                headers: { 'X-MBX-APIKEY': CONFIG.BINANCE.API_KEY },
+                validateStatus: () => true,
+                timeout: 5000
+            });
+        });
+        
+        if (!response) {
+            logger.error(`[ORDER VERIFY] ❌ Verification failed - rate limit or network error`);
+            return null;
+        }
+        
+        if (response.status >= 200 && response.status < 300) {
+            if (orderId) {
+                // Single order check
+                if (response.data && response.data.orderId) {
+                    logger.success(`[ORDER VERIFY] ✅ Order ${orderId} found on Binance:`, {
+                        status: response.data.status,
+                        executedQty: response.data.executedQty,
+                        avgPrice: response.data.avgPrice,
+                        time: new Date(response.data.time).toISOString()
+                    });
+                    return response.data;
+                } else {
+                    logger.warn(`[ORDER VERIFY] ⚠️  Order ${orderId} not found in response`);
+                    return null;
+                }
+            } else {
+                // Recent orders check
+                const orders = Array.isArray(response.data) ? response.data : [response.data];
+                if (orders.length > 0) {
+                    logger.info(`[ORDER VERIFY] Found ${orders.length} recent orders for ${symbol}:`);
+                    orders.slice(0, 5).forEach((order, idx) => {
+                        logger.info(`[ORDER VERIFY]   ${idx + 1}. Order ID: ${order.orderId} - Status: ${order.status} - Time: ${new Date(order.time).toISOString()}`);
+                    });
+                    
+                    // Check if any are recent (within last 2 minutes)
+                    const recentOrders = orders.filter(order => {
+                        const orderTime = order.time;
+                        const now = Date.now();
+                        return (now - orderTime) < 120000; // 2 minutes
+                    });
+                    
+                    if (recentOrders.length > 0) {
+                        logger.success(`[ORDER VERIFY] ✅ Found ${recentOrders.length} recent order(s) - order may have executed!`);
+                        return recentOrders[0]; // Return most recent
+                    } else {
+                        logger.info(`[ORDER VERIFY] No recent orders found (all older than 2 minutes)`);
+                        return null;
+                    }
+                } else {
+                    logger.warn(`[ORDER VERIFY] ⚠️  No orders found for ${symbol}`);
+                    return null;
+                }
+            }
+        } else {
+            logger.error(`[ORDER VERIFY] ❌ Failed to verify orders (status ${response.status})`);
+            logger.error(`[ORDER VERIFY] Response:`, response.data);
+            return null;
+        }
+    } catch (error) {
+        logger.error(`[ORDER VERIFY] ❌ Error verifying orders:`, error.message);
+        return null;
+    }
+}
+
+// ============================================================================
+// FIX #4: Test API Keys Explicitly at Startup
+// ============================================================================
+
+async function testAPIKeys() {
+    console.log('[INIT] 📊 PAPER TRADING MODE ENABLED');
+    console.log('[PAPER TRADING] Using public mainnet data (no authentication required)');
+    console.log('[PAPER TRADING] All trades are simulated locally');
+    console.log(`[PAPER TRADING] Starting balance: $${paperBalance.toFixed(2)}`);
+    return true;
+}
+
+async function verifyAPIPermissions() {
+    try {
+        logger.info('[API] Verifying API permissions...');
+        
+        // Test 1: Read permission (get account)
+        const balance = await getAccountBalance();
+        if (balance) {
+            logger.success('[API] ✅ Read permission: GRANTED');
+        } else {
+            logger.error('[API] ❌ Read permission: DENIED or FAILED');
+            return false;
+        }
+        
+        // Test 2: Futures access (get positions)
+        try {
+            const timestamp = Date.now();
+            const queryString = `timestamp=${timestamp}`;
+            const signature = signRequest(queryString);
+            
+            const response = await axios.get(
+                `${CONFIG.BINANCE.FUTURES_API}/positionRisk?timestamp=${timestamp}&signature=${signature}`,
+                {
+                    headers: { 'X-MBX-APIKEY': CONFIG.BINANCE.API_KEY },
+                    validateStatus: () => true
+                }
+            );
+            
+            if (response.status >= 200 && response.status < 300) {
+                logger.success('[API] ✅ Futures access: GRANTED');
+            } else {
+                logger.warn(`[API] ⚠️  Futures access check returned status ${response.status}`);
+            }
+        } catch (error) {
+            logger.warn(`[API] ⚠️  Could not verify futures access:`, error.message);
+        }
+        
+        // Test 3: Check if account can trade
+        if (balance && balance.totalMarginBalance > 0) {
+            logger.success('[API] ✅ Trading permission: LIKELY GRANTED (account has balance)');
+            logger.info('[API] (Will confirm on first order attempt)');
+        } else {
+            logger.warn('[API] ⚠️  Account balance is $0 - cannot verify trading permission');
+        }
+        
+        return true;
+    } catch (error) {
+        logger.error('[API] ❌ Permission check failed:', error.message);
+        return false;
+    }
+}
+
+// ============================================================================
+// RISK MANAGEMENT
+// ============================================================================
+function calculateRiskAmount(confluenceRating) {
+    const currentEquity = accountState.currentEquity;
+    const baseRisk = CONFIG.RISK_PERCENT_BASE;
+    
+    // Get risk adjustment for this confluence level
+    const riskAdjustment = CONFIG.CONFLUENCE_RISK[confluenceRating] || 0;
+    
+    // Calculate total risk percentage
+    let riskPercent = baseRisk + riskAdjustment;
+    
+    // Apply caps
+    riskPercent = Math.min(riskPercent, CONFIG.MAX_RISK_PERCENT);
+    riskPercent = Math.max(riskPercent, CONFIG.MIN_RISK_PERCENT);
+    
+    // Calculate dollar amount
+    const riskAmount = currentEquity * (riskPercent / 100);
+    
+    return {
+        riskAmount,
+        riskPercent,
+        confluenceRating
+    };
+}
+
+function calculatePositionSize(asset, entryPrice, stopPrice, confluenceRating) {
+    const riskData = calculateRiskAmount(confluenceRating);
+    const stopDistance = Math.abs(entryPrice - stopPrice);
+    
+    if (stopDistance === 0) {
+        logger.error('[RISK] Stop distance is zero - cannot calculate position size');
+        return null;
+    }
+    
+    // Position size = Risk Amount / Stop Distance
+    let positionSize = riskData.riskAmount / stopDistance;
+    
+    // Apply minimum position sizes
+    const minPosition = asset === 'btc' ? CONFIG.MIN_BTC_POSITION : CONFIG.MIN_ETH_POSITION;
+    positionSize = Math.max(positionSize, minPosition);
+    
+    // Calculate notional value and required margin
+    const notionalValue = positionSize * entryPrice;
+    const requiredMargin = notionalValue / CONFIG.LEVERAGE;
+    
+    // Check if we have enough margin
+    const availableMargin = accountState.currentEquity * 0.8; // Use max 80% of equity
+    if (requiredMargin > availableMargin) {
+        logger.warn(`[RISK] Position requires $${requiredMargin.toFixed(2)} margin, but only $${availableMargin.toFixed(2)} available. Scaling down.`);
+        positionSize = (availableMargin * CONFIG.LEVERAGE) / entryPrice;
+    }
+    
+    return {
+        positionSize,
+        notionalValue: positionSize * entryPrice,
+        requiredMargin: (positionSize * entryPrice) / CONFIG.LEVERAGE,
+        riskAmount: riskData.riskAmount,
+        riskPercent: riskData.riskPercent,
+        stopDistance
+    };
+}
+
+function canTakeNewTrade() {
+    // CRITICAL: Check if account has balance
+    if (accountState.currentEquity <= 0) {
+        logger.error('[RISK] ⛔ Account balance is $0 - cannot place orders');
+        logger.error('[RISK] Please fund your account at: https://demo.binance.com');
+        return false;
+    }
+    
+    // Check if balance is too low (less than $100)
+    if (accountState.currentEquity < 100) {
+        logger.warn('[RISK] ⚠️  Account balance is very low:', {
+            balance: `$${Number(accountState.currentEquity || 0).toFixed(2)}`,
+            message: 'Minimum recommended: $100 for testing'
+        });
+    }
+    
+    // Check daily loss limit
+    if (accountState.dailyLossLimitHit) {
+        logger.info('[RISK] ⛔ Daily loss limit hit - no new trades');
+        return false;
+    }
+    
+    // Check max open positions
+    if (accountState.openPositions.length >= CONFIG.MAX_OPEN_POSITIONS) {
+        logger.info('[RISK] ⛔ Max open positions reached');
+        return false;
+    }
+    
+    // Check if we have remaining daily budget
+    const remainingBudget = CONFIG.DAILY_LOSS_LIMIT + accountState.dailyPnL;
+    if (remainingBudget <= 0) {
+        logger.info('[RISK] ⛔ No remaining daily loss budget');
+        return false;
+    }
+    
+    return true;
+}
+
+async function placeMarketOrder(symbol, side, quantity) {
+    // Paper trading mode - simulate order execution
+    if (CONFIG.BINANCE.PAPER_TRADING_MODE) {
+        try {
+            // Get real current price from cache
+            const asset = symbol.includes('BTC') ? 'btc' : symbol.includes('ETH') ? 'eth' : null;
+            let currentPrice = currentPrices[asset] || 0;
+            
+            // If price not in cache, try to get from price history
+            if (!currentPrice || currentPrice === 0) {
+                const priceHistoryData = priceHistory[asset];
+                if (priceHistoryData && priceHistoryData.length > 0) {
+                    currentPrice = priceHistoryData[priceHistoryData.length - 1].price;
+                }
+            }
+            
+            // Fallback: if still no price, use a reasonable default (but log warning)
+            if (!currentPrice || currentPrice === 0) {
+                currentPrice = asset === 'btc' ? 90000 : asset === 'eth' ? 3000 : 1;
+                logger.warn(`[PAPER TRADE] ⚠️  No current price found for ${symbol}, using fallback: $${currentPrice}`);
+            }
+            
+            const timestamp = new Date().toISOString();
+            const orderId = `PAPER_${Date.now()}`;
+            const trade = {
+                orderId: orderId,
+                symbol: symbol,
+                side: side,
+                quantity: parseFloat(quantity),
+                type: 'MARKET',
+                status: 'FILLED',
+                executedQty: parseFloat(quantity),
+                avgPrice: currentPrice,
+                timestamp: timestamp
+            };
+            
+            // Simulate trading fee (1%)
+            const tradeValue = parseFloat(quantity) * currentPrice;
+            const fee = tradeValue * 0.01;
+            
+            if (side === 'BUY') {
+                paperBalance -= (tradeValue + fee);
+                paperPositions.push({...trade, entryPrice: currentPrice});
+            } else if (side === 'SELL') {
+                paperBalance += (tradeValue - fee);
+                paperPositions = paperPositions.filter(p => p.symbol !== symbol);
+            }
+            
+            paperTrades.push(trade);
+            logger.info(`[PAPER TRADE] ${side} ${quantity} ${symbol} @ $${currentPrice.toFixed(2)} - Balance: $${paperBalance.toFixed(2)}`);
+            
+            return {
+                orderId: orderId,
+                symbol: symbol,
+                side: side,
+                type: 'MARKET',
+                status: 'FILLED',
+                executedQty: parseFloat(quantity),
+                avgPrice: currentPrice.toString(),
+                price: currentPrice.toString()
+            };
+        } catch (error) {
+            logger.error('[PAPER TRADE ERROR]', error.message);
+            return null;
+        }
+    }
+    
+    const orderStartTime = Date.now();
+    logger.info(`\n${'='.repeat(80)}`);
+    logger.info(`[ORDER EXECUTION] 🚀 STARTING MARKET ORDER PLACEMENT`);
+    logger.info(`${'='.repeat(80)}`);
+    logger.info(`[ORDER EXECUTION] Input Parameters:`, {
+        symbol: symbol,
+        side: side,
+        quantity: quantity,
+        quantityType: typeof quantity,
+        timestamp: new Date().toISOString()
+    });
+    
+    try {
+        // STEP 1: Get symbol precision
+        logger.info(`[ORDER EXECUTION] STEP 1: Fetching symbol precision for ${symbol}...`);
+        const precision = await getSymbolPrecision(symbol);
+        logger.info(`[ORDER EXECUTION] ✅ Precision fetched:`, {
+            minQty: precision.minQty,
+            stepSize: precision.stepSize,
+            pricePrecision: precision.pricePrecision
+        });
+        
+        // STEP 2: Format quantity - CRITICAL: Ensure it's a NUMBER, not a string
+        logger.info(`[ORDER EXECUTION] STEP 2: Formatting quantity...`);
+        logger.info(`[ORDER EXECUTION] Original quantity: ${quantity} (type: ${typeof quantity})`);
+        
+        // 🔴 BUG FIX #1: Convert to number explicitly
+        let parsedQuantity;
+        if (typeof quantity === 'string') {
+            parsedQuantity = parseFloat(quantity);
+            logger.info(`[ORDER EXECUTION] Converted string to number: "${quantity}" → ${parsedQuantity}`);
+        } else if (typeof quantity === 'number') {
+            parsedQuantity = quantity;
+            logger.info(`[ORDER EXECUTION] Quantity is already a number: ${parsedQuantity}`);
+        } else {
+            logger.error(`[ORDER EXECUTION] ❌ Invalid quantity type: ${typeof quantity}`);
+            return null;
+        }
+        
+        // Validate parsed quantity
+        if (isNaN(parsedQuantity) || parsedQuantity <= 0) {
+            logger.error(`[ORDER EXECUTION] ❌ Invalid quantity value: ${parsedQuantity}`);
+            return null;
+        }
+        
+        const formattedQuantity = formatQuantity(parsedQuantity, symbol);
+        logger.info(`[ORDER EXECUTION] ✅ Formatted quantity: ${formattedQuantity} (type: ${typeof formattedQuantity})`);
+        
+        // Ensure formattedQuantity is a number
+        if (typeof formattedQuantity !== 'number') {
+            logger.error(`[ORDER EXECUTION] ❌ Formatted quantity is not a number: ${typeof formattedQuantity}`);
+            return null;
+        }
+        
+        // STEP 3: Validate minimum quantity
+        logger.info(`[ORDER EXECUTION] STEP 3: Validating minimum quantity...`);
+        if (formattedQuantity < precision.minQty) {
+            logger.error(`[ORDER EXECUTION] ❌ VALIDATION FAILED: Quantity ${formattedQuantity} is below minimum ${precision.minQty} for ${symbol}`);
+            logger.error(`[ORDER EXECUTION] Order placement ABORTED`);
+            return null;
+        }
+        logger.info(`[ORDER EXECUTION] ✅ Quantity validation passed: ${formattedQuantity} >= ${precision.minQty}`);
+        
+        // STEP 4: Build query string - CRITICAL: Ensure numeric values
+        logger.info(`[ORDER EXECUTION] STEP 4: Building request parameters...`);
+        const timestamp = Date.now();
+        
+        // 🔴 BUG FIX #2: Ensure quantity is numeric in query string
+        // JavaScript template literals will convert numbers to strings automatically, which is fine
+        // But we log to verify the type
+        logger.info(`[ORDER EXECUTION] Quantity for query string: ${formattedQuantity} (type: ${typeof formattedQuantity})`);
+        
+        let queryString = `symbol=${String(symbol).toUpperCase()}&side=${String(side).toUpperCase()}&type=MARKET&quantity=${formattedQuantity}&timestamp=${timestamp}`;
+        logger.info(`[ORDER EXECUTION] Base query string: ${queryString}`);
+        logger.info(`[ORDER EXECUTION] Query string quantity value: ${formattedQuantity} (should be numeric, not string)`);
+        
+        // Add positionSide if in HEDGE mode
+        if (positionMode === 'HEDGE') {
+            const positionSide = side === 'BUY' ? 'LONG' : 'SHORT';
+            queryString += `&positionSide=${positionSide}`;
+            logger.info(`[ORDER EXECUTION] ✅ Added positionSide: ${positionSide} (Hedge Mode)`);
+        } else {
+            logger.info(`[ORDER EXECUTION] ✅ No positionSide (One-Way Mode: ${positionMode})`);
+        }
+        
+        // STEP 5: Sign request
+        logger.info(`[ORDER EXECUTION] STEP 5: Signing request...`);
+        logger.info(`[ORDER EXECUTION] Query string to sign: ${queryString}`);
+        const signature = signRequest(queryString);
+        logger.info(`[ORDER EXECUTION] ✅ Signature generated: ${signature.substring(0, 20)}...`);
+        
+        // STEP 6: Build full URL
+        const fullUrl = `${CONFIG.BINANCE.FUTURES_API}/order?${queryString}&signature=${signature}`;
+        logger.info(`[ORDER EXECUTION] STEP 6: Preparing API request...`);
+        logger.info(`[ORDER EXECUTION] Full URL: ${fullUrl}`);
+        logger.info(`[ORDER EXECUTION] API Key: ${CONFIG.BINANCE.API_KEY.substring(0, 10)}...`);
+        logger.info(`[ORDER EXECUTION] API Endpoint: ${CONFIG.BINANCE.FUTURES_API}`);
+        
+        // STEP 7: Make API call with rate limiting
+        logger.info(`[ORDER EXECUTION] STEP 7: Sending POST request to Binance API (with rate limiting)...`);
+        logger.info(`[ORDER EXECUTION] Request headers:`, {
+            'X-MBX-APIKEY': `${CONFIG.BINANCE.API_KEY.substring(0, 10)}...`,
+            'Content-Type': 'application/json'
+        });
+        
+        const requestStartTime = Date.now();
+        let response;
+        try {
+            // Wrap API call with rate limiting and exponential backoff
+            response = await safeAPICall(async () => {
+                return await axios.post(
+                    fullUrl,
+                    null,
+                    {
+                        headers: { 
+                            'X-MBX-APIKEY': CONFIG.BINANCE.API_KEY,
+                            'Content-Type': 'application/json'
+                        },
+                        validateStatus: function (status) {
+                            logger.info(`[ORDER EXECUTION] Response status: ${status}`);
+                            return status < 500; // Don't throw for 4xx errors
+                        },
+                        timeout: 10000 // 10 second timeout
+                    }
+                );
+            });
+            
+            if (!response) {
+                logger.error(`[ORDER EXECUTION] ❌ API request failed - rate limit or network error`);
+                return null;
+            }
+            
+            const requestDuration = Date.now() - requestStartTime;
+            logger.info(`[ORDER EXECUTION] ✅ API request completed in ${requestDuration}ms`);
+        } catch (requestError) {
+            const requestDuration = Date.now() - requestStartTime;
+            logger.error(`[ORDER EXECUTION] ❌ API REQUEST FAILED after ${requestDuration}ms`);
+            logger.error(`[ORDER EXECUTION] Request error type: ${requestError.constructor.name}`);
+            logger.error(`[ORDER EXECUTION] Request error message: ${requestError.message}`);
+            
+            if (requestError.response) {
+                logger.error(`[ORDER EXECUTION] Response status: ${requestError.response.status}`);
+                logger.error(`[ORDER EXECUTION] Response data:`, JSON.stringify(requestError.response.data));
+                
+                // Check for rate limit error
+                if (requestError.response.status === 429) {
+                    logger.error(`[ORDER EXECUTION] ❌ RATE LIMIT HIT (429) - Order failed`);
+                    logger.error(`[ORDER EXECUTION] Please wait before attempting more orders`);
+                }
+            } else if (requestError.request) {
+                logger.error(`[ORDER EXECUTION] No response received - request object:`, requestError.request);
+            }
+            
+            logger.error(`[ORDER EXECUTION] Full error stack:`, requestError.stack);
+            return null; // Return null instead of throwing - no retry loops
+        }
+        
+        // STEP 8: Analyze response - CRITICAL: Enhanced validation
+        logger.info(`[ORDER EXECUTION] STEP 8: Analyzing API response...`);
+        logger.info(`[ORDER EXECUTION] Response status code: ${response.status}`);
+        logger.info(`[ORDER EXECUTION] Response status text: ${response.statusText}`);
+        logger.info(`[ORDER EXECUTION] Response data type: ${typeof response.data}`);
+        logger.info(`[ORDER EXECUTION] Response data is null: ${response.data === null}`);
+        logger.info(`[ORDER EXECUTION] Response data is undefined: ${response.data === undefined}`);
+        
+        // Check if response.data exists
+        if (response.data === null || response.data === undefined) {
+            logger.error(`[ORDER EXECUTION] ❌ Response data is NULL or UNDEFINED`);
+            logger.error(`[ORDER EXECUTION] Response object keys:`, Object.keys(response || {}));
+            logger.error(`[ORDER EXECUTION] Attempting to verify if order went through anyway...`);
+            
+            // Try to verify if order actually went through
+            const verified = await verifyOrderExecuted(symbol, null);
+            if (verified) {
+                logger.warn(`[ORDER EXECUTION] ⚠️  Order may have executed despite null response - check Binance`);
+            }
+            return null;
+        }
+        
+        // Check response data length
+        const dataLength = typeof response.data === 'string' ? response.data.length : 
+                          (response.data ? JSON.stringify(response.data).length : 0);
+        logger.info(`[ORDER EXECUTION] Response data length: ${dataLength}`);
+        
+        if (dataLength === 0) {
+            logger.error(`[ORDER EXECUTION] ❌ Response data length is 0 (EMPTY)`);
+            logger.error(`[ORDER EXECUTION] Response headers:`, JSON.stringify(response.headers));
+            logger.error(`[ORDER EXECUTION] Attempting to verify if order went through anyway...`);
+            
+            // Try to verify if order actually went through
+            const verified = await verifyOrderExecuted(symbol, null);
+            if (verified) {
+                logger.warn(`[ORDER EXECUTION] ⚠️  Order may have executed despite empty response - check Binance`);
+            }
+            return null;
+        }
+        
+        logger.info(`[ORDER EXECUTION] Response headers:`, JSON.stringify(response.headers));
+        
+        // Log full response (truncated if too long)
+        let responseString;
+        try {
+            responseString = typeof response.data === 'string' 
+                ? response.data 
+                : JSON.stringify(response.data);
+            logger.info(`[ORDER EXECUTION] Full response data:`, responseString.substring(0, 1000));
+        } catch (e) {
+            logger.error(`[ORDER EXECUTION] ❌ Cannot stringify response data:`, e.message);
+            logger.error(`[ORDER EXECUTION] Response data type: ${typeof response.data}`);
+        }
+        
+        // Check for error status codes
+        if (response.status < 200 || response.status >= 300) {
+            logger.error(`[ORDER EXECUTION] ❌ HTTP ERROR STATUS: ${response.status}`);
+            logger.error(`[ORDER EXECUTION] Response data:`, response.data);
+            logger.error(`[ORDER EXECUTION] Order placement FAILED`);
+            return null;
+        }
+        
+        // STEP 9: Parse response - CRITICAL: Enhanced parsing with better error handling
+        logger.info(`[ORDER EXECUTION] STEP 9: Parsing response data...`);
+        let responseData = response.data;
+        
+        if (typeof responseData === 'string') {
+            logger.info(`[ORDER EXECUTION] Response is string (length: ${responseData.length})`);
+            
+            // Check for empty string
+            if (responseData.trim() === '') {
+                logger.error(`[ORDER EXECUTION] ❌ Response is EMPTY STRING`);
+                logger.error(`[ORDER EXECUTION] Attempting to verify if order went through anyway...`);
+                const verified = await verifyOrderExecuted(symbol, null);
+                if (verified) {
+                    logger.warn(`[ORDER EXECUTION] ⚠️  Order may have executed despite empty string response`);
+                }
+                return null;
+            }
+            
+            // Try to parse as JSON
+            try {
+                responseData = JSON.parse(responseData);
+                logger.info(`[ORDER EXECUTION] ✅ Successfully parsed JSON from string`);
+            } catch (e) {
+                logger.error(`[ORDER EXECUTION] ❌ Failed to parse JSON string:`, e.message);
+                logger.error(`[ORDER EXECUTION] Error type: ${e.constructor.name}`);
+                logger.error(`[ORDER EXECUTION] String content (first 500 chars): ${responseData.substring(0, 500)}`);
+                
+                // Check for specific JSON errors
+                if (e.message.includes('Unexpected end of JSON input')) {
+                    logger.error(`[ORDER EXECUTION] ❌ JSON parsing error: Unexpected end of JSON input`);
+                    logger.error(`[ORDER EXECUTION] This usually means the response was truncated or incomplete`);
+                }
+                
+                // Check if it's an error message
+                if (responseData.includes('error') || responseData.includes('Error') || responseData.includes('invalid')) {
+                    logger.error(`[ORDER EXECUTION] Error response from Binance: ${responseData}`);
+                }
+                logger.error(`[ORDER EXECUTION] Order placement FAILED - invalid response format`);
+                
+                // Try to verify if order went through anyway
+                const verified = await verifyOrderExecuted(symbol, null);
+                if (verified) {
+                    logger.warn(`[ORDER EXECUTION] ⚠️  Order may have executed despite JSON parse error`);
+                }
+                return null;
+            }
+        } else if (typeof responseData === 'object' && responseData !== null) {
+            logger.info(`[ORDER EXECUTION] ✅ Response is already an object`);
+        } else {
+            logger.error(`[ORDER EXECUTION] ❌ Response data is unexpected type: ${typeof responseData}`);
+            logger.error(`[ORDER EXECUTION] Response data value:`, responseData);
+            return null;
+        }
+        
+        // Handle empty or invalid responses
+        if (!responseData || (typeof responseData === 'string' && responseData.trim() === '')) {
+            logger.error(`[ORDER EXECUTION] ❌ Empty or invalid response from API`);
+            logger.error(`[ORDER EXECUTION] Response data:`, responseData);
+            logger.error(`[ORDER EXECUTION] Order placement FAILED`);
+            
+            // Try to verify if order went through anyway
+            const verified = await verifyOrderExecuted(symbol, null);
+            if (verified) {
+                logger.warn(`[ORDER EXECUTION] ⚠️  Order may have executed despite invalid response`);
+            }
+            return null;
+        }
+        
+        // CRITICAL: Validate required fields exist
+        logger.info(`[ORDER EXECUTION] STEP 9.5: Validating response structure...`);
+        const requiredFields = ['orderId', 'status'];
+        const missingFields = requiredFields.filter(f => !(f in responseData));
+        
+        if (missingFields.length > 0) {
+            logger.error(`[ORDER EXECUTION] ❌ Response missing required fields: ${missingFields.join(', ')}`);
+            logger.error(`[ORDER EXECUTION] Available fields:`, Object.keys(responseData || {}));
+            logger.error(`[ORDER EXECUTION] Full response:`, JSON.stringify(responseData));
+            
+            // Try to verify if order went through anyway
+            const verified = await verifyOrderExecuted(symbol, null);
+            if (verified) {
+                logger.warn(`[ORDER EXECUTION] ⚠️  Order may have executed despite missing fields`);
+            }
+            return null;
+        }
+        
+        logger.info(`[ORDER EXECUTION] ✅ Response structure validated - all required fields present`);
+        
+        logger.info(`[ORDER EXECUTION] Parsed response keys:`, Object.keys(responseData || {}));
+        
+        // STEP 10: Check for Binance error codes
+        logger.info(`[ORDER EXECUTION] STEP 10: Checking for Binance error codes...`);
+        if (responseData.code && responseData.code < 0) {
+            logger.error(`\n${'='.repeat(80)}`);
+            logger.error(`[ORDER EXECUTION] ❌ BINANCE API ERROR DETECTED`);
+            logger.error(`${'='.repeat(80)}`);
+            logger.error(`[ORDER EXECUTION] Error Code: ${responseData.code}`);
+            logger.error(`[ORDER EXECUTION] Error Message: ${responseData.msg}`);
+            logger.error(`[ORDER EXECUTION] Order Details:`, {
+                symbol: symbol,
+                side: side,
+                quantity: formattedQuantity,
+                originalQuantity: quantity,
+                positionMode: positionMode
+            });
+            logger.error(`[ORDER EXECUTION] Full Response:`, JSON.stringify(responseData));
+            
+            // Log specific error messages with fixes
+            if (responseData.code === -1111) {
+                logger.error(`[ORDER EXECUTION] FIX: Precision error - quantity decimal places incorrect`);
+                logger.error(`[ORDER EXECUTION] FIX: BTCUSDT: Use 3 decimals (0.001, 0.002, etc.)`);
+                logger.error(`[ORDER EXECUTION] FIX: ETHUSDT: Use 2 decimals (0.01, 0.02, etc.)`);
+                logger.error(`[ORDER EXECUTION] FIX: Attempted: ${formattedQuantity}, Min: ${precision.minQty}, Step: ${precision.stepSize}`);
+            } else if (responseData.code === -2010) {
+                logger.error(`[ORDER EXECUTION] FIX: Insufficient balance - account may have $0 or not enough margin`);
+            } else if (responseData.code === -1013) {
+                logger.error(`[ORDER EXECUTION] FIX: Invalid quantity - check lot size requirements`);
+                logger.error(`[ORDER EXECUTION] FIX: Quantity ${formattedQuantity} must be >= ${precision.minQty} and multiple of ${precision.stepSize}`);
+            } else if (responseData.code === -2019) {
+                logger.error(`[ORDER EXECUTION] FIX: Margin insufficient - need more balance`);
+            } else if (responseData.code === -4061) {
+                logger.error(`[ORDER EXECUTION] FIX: Order price/quantity exceeds limit`);
+                logger.error(`[ORDER EXECUTION] FIX: Reduce order size or check min notional value`);
+            } else if (responseData.code === -2015) {
+                logger.error(`[ORDER EXECUTION] FIX: Invalid API key or insufficient permissions`);
+                logger.error(`[ORDER EXECUTION] FIX: Verify 'Enable Futures' is checked in API settings`);
+            } else if (responseData.code === -4059) {
+                logger.error(`[ORDER EXECUTION] FIX: Position side error - check Hedge vs One-Way mode`);
+                logger.error(`[ORDER EXECUTION] FIX: Current mode: ${positionMode}`);
+            }
+            
+            logger.error(`${'='.repeat(80)}\n`);
+            return null;
+        }
+        logger.info(`[ORDER EXECUTION] ✅ No error codes detected`);
+        
+        // STEP 11: Extract order ID
+        logger.info(`[ORDER EXECUTION] STEP 11: Extracting order ID...`);
+        const orderId = responseData.orderId || responseData.id || responseData.clientOrderId || responseData.orderListId;
+        
+        if (!orderId) {
+            logger.error(`[ORDER EXECUTION] ❌ NO ORDER ID FOUND IN RESPONSE`);
+            logger.error(`[ORDER EXECUTION] Full response:`, JSON.stringify(responseData));
+            logger.error(`[ORDER EXECUTION] Response keys:`, Object.keys(responseData || {}));
+            logger.error(`[ORDER EXECUTION] Order placement FAILED - cannot proceed without orderId`);
+            return null;
+        }
+        
+        logger.info(`[ORDER EXECUTION] ✅ Order ID extracted: ${orderId}`);
+        
+        // STEP 12: Build return object
+        logger.info(`[ORDER EXECUTION] STEP 12: Building return object...`);
+        const orderResult = {
+            ...responseData,
+            orderId: orderId,
+            avgPrice: responseData.avgPrice || responseData.price || null,
+            status: responseData.status || 'NEW',
+            executedQty: responseData.executedQty || '0',
+            cummulativeQuoteQty: responseData.cummulativeQuoteQty || '0'
+        };
+        
+        const totalDuration = Date.now() - orderStartTime;
+        logger.success(`\n${'='.repeat(80)}`);
+        logger.success(`[ORDER EXECUTION] ✅ ORDER PLACED SUCCESSFULLY`);
+        logger.success(`${'='.repeat(80)}`);
+        logger.success(`[ORDER EXECUTION] Order ID: ${orderId}`);
+        logger.success(`[ORDER EXECUTION] Symbol: ${symbol}`);
+        logger.success(`[ORDER EXECUTION] Side: ${side}`);
+        logger.success(`[ORDER EXECUTION] Quantity: ${formattedQuantity}`);
+        logger.success(`[ORDER EXECUTION] Status: ${orderResult.status}`);
+        logger.success(`[ORDER EXECUTION] Executed Qty: ${orderResult.executedQty}`);
+        logger.success(`[ORDER EXECUTION] Avg Price: ${orderResult.avgPrice}`);
+        logger.success(`[ORDER EXECUTION] Total Duration: ${totalDuration}ms`);
+        logger.success(`${'='.repeat(80)}\n`);
+        
+        return orderResult;
+    } catch (error) {
+        // Comprehensive error logging
+        logger.error(`[ORDER] ❌ Exception placing market order:`, {
+            error: error.message,
+            errorType: error.constructor.name,
+            errorStack: error.stack?.substring(0, 200),
+            symbol: symbol,
+            side: side,
+            quantity: quantity
+        });
+        
+        // Log full error response if available
+        if (error.response) {
+            logger.error(`[ORDER] HTTP Error Response:`, {
+                status: error.response.status,
+                statusText: error.response.statusText,
+                headers: error.response.headers,
+                data: error.response.data,
+                dataType: typeof error.response.data,
+                dataString: typeof error.response.data === 'string' ? error.response.data : JSON.stringify(error.response.data)
+            });
+            
+            // Check for Binance error codes in response
+            if (error.response.data && typeof error.response.data === 'object') {
+                if (error.response.data.code) {
+                    logger.error(`[ORDER] Binance Error Code: ${error.response.data.code}`);
+                    logger.error(`[ORDER] Binance Error Message: ${error.response.data.msg}`);
+                }
+            }
+        } else if (error.request) {
+            logger.error(`[ORDER] No response received:`, {
+                request: error.request,
+                message: 'Request was made but no response received'
+            });
+        } else {
+            logger.error(`[ORDER] Request setup error:`, error.message);
+        }
+        
+        return null;
+    }
+}
+
+async function placeStopLossOrder(symbol, side, quantity, stopPrice) {
+    // Paper trading mode - simulate order execution
+    if (CONFIG.BINANCE.PAPER_TRADING_MODE) {
+        try {
+            const timestamp = new Date().toISOString();
+            const orderId = `PAPER_SL_${Date.now()}`;
+            const trade = {
+                orderId: orderId,
+                symbol: symbol,
+                side: side,
+                quantity: parseFloat(quantity),
+                type: 'STOP_MARKET',
+                stopPrice: parseFloat(stopPrice),
+                status: 'NEW',
+                timestamp: timestamp
+            };
+            
+            paperTrades.push(trade);
+            logger.info(`[PAPER TRADE] Stop-loss order placed: ${side} ${quantity} ${symbol} @ ${stopPrice}`);
+            
+            return {
+                orderId: orderId,
+                symbol: symbol,
+                side: side,
+                type: 'STOP_MARKET',
+                status: 'NEW',
+                stopPrice: parseFloat(stopPrice)
+            };
+        } catch (error) {
+            logger.error('[PAPER TRADE ERROR]', error.message);
+            return null;
+        }
+    }
+    
+    try {
+        // 🔴 BUG FIX: Ensure quantity is a NUMBER, not a string
+        let parsedQuantity;
+        if (typeof quantity === 'string') {
+            parsedQuantity = parseFloat(quantity);
+        } else if (typeof quantity === 'number') {
+            parsedQuantity = quantity;
+        } else {
+            logger.error(`[ORDER] ❌ Invalid quantity type for stop-loss: ${typeof quantity}`);
+            return null;
+        }
+        
+        if (isNaN(parsedQuantity) || parsedQuantity <= 0) {
+            logger.error(`[ORDER] ❌ Invalid quantity value for stop-loss: ${parsedQuantity}`);
+            return null;
+        }
+        
+        // Get symbol precision and format quantity
+        const precision = await getSymbolPrecision(symbol);
+        const formattedQuantity = formatQuantity(parsedQuantity, symbol);
+        
+        // 🔴 BUG FIX: Ensure stopPrice is a NUMBER
+        let parsedStopPrice;
+        if (typeof stopPrice === 'string') {
+            parsedStopPrice = parseFloat(stopPrice);
+        } else if (typeof stopPrice === 'number') {
+            parsedStopPrice = stopPrice;
+        } else {
+            logger.error(`[ORDER] ❌ Invalid stopPrice type: ${typeof stopPrice}`);
+            return null;
+        }
+        
+        if (isNaN(parsedStopPrice) || parsedStopPrice <= 0) {
+            logger.error(`[ORDER] ❌ Invalid stopPrice value: ${parsedStopPrice}`);
+            return null;
+        }
+        
+        // Format stop price to proper precision
+        const formattedStopPrice = parseFloat(parsedStopPrice.toFixed(precision.pricePrecision));
+        
+        // Build query string - ensure all values are proper types
+        const timestamp = Date.now();
+        let queryString = `symbol=${String(symbol).toUpperCase()}&side=${String(side).toUpperCase()}&type=STOP_MARKET&stopPrice=${formattedStopPrice}&closePosition=false&quantity=${formattedQuantity}&timestamp=${timestamp}`;
+        
+        logger.info(`[ORDER] Stop-loss parameters (types):`, {
+            quantity: `${formattedQuantity} (${typeof formattedQuantity})`,
+            stopPrice: `${formattedStopPrice} (${typeof formattedStopPrice})`
+        });
+        
+        // Add positionSide if in HEDGE mode
+        if (positionMode === 'HEDGE') {
+            const positionSide = side === 'BUY' ? 'LONG' : 'SHORT';
+            queryString += `&positionSide=${positionSide}`;
+        }
+        
+        const signature = signRequest(queryString);
+        
+        logger.info(`[ORDER] Placing stop-loss order:`, {
+            symbol: symbol,
+            side: side,
+            quantity: formattedQuantity,
+            stopPrice: formattedStopPrice,
+            type: 'STOP_MARKET',
+            positionMode: positionMode
+        });
+        
+        const response = await safeAPICall(async () => {
+            return await axios.post(
+                `${CONFIG.BINANCE.FUTURES_API}/order?${queryString}&signature=${signature}`,
+                null,
+                {
+                    headers: { 
+                        'X-MBX-APIKEY': CONFIG.BINANCE.API_KEY,
+                        'Content-Type': 'application/json'
+                    },
+                    validateStatus: function (status) {
+                        return status < 500;
+                    },
+                    timeout: 10000
+                }
+            );
+        });
+        
+        if (!response) {
+            logger.error(`[ORDER] ❌ Stop-loss order failed - rate limit or network error`);
+            return null;
+        }
+        
+        // Log raw response
+        logger.info(`[ORDER] Stop-loss response status: ${response.status}`);
+        logger.info(`[ORDER] Stop-loss response:`, JSON.stringify(response.data).substring(0, 500));
+        
+        if (response.status < 200 || response.status >= 300) {
+            logger.error(`[ORDER] Stop-loss HTTP error status ${response.status}:`, response.data);
+            return null;
+        }
+        
+        // Handle string responses
+        let responseData = response.data;
+        if (typeof responseData === 'string') {
+            try {
+                responseData = JSON.parse(responseData);
+            } catch (e) {
+                logger.error(`[ORDER] Stop-loss: Failed to parse JSON string:`, e.message);
+                logger.error(`[ORDER] Stop-loss string content:`, responseData.substring(0, 500));
+                return null;
+            }
+        }
+        
+        if (!responseData || (typeof responseData === 'string' && responseData.trim() === '')) {
+            logger.error(`[ORDER] Empty stop-loss response from API`);
+            return null;
+        }
+        
+        // Check for Binance error codes
+        if (responseData.code && responseData.code < 0) {
+            logger.error(`[ORDER] Stop-loss Binance API Error:`, {
+                code: responseData.code,
+                msg: responseData.msg
+            });
+            return null;
+        }
+        
+        const orderId = responseData.orderId || responseData.id || responseData.clientOrderId || responseData.orderListId;
+        
+        if (!orderId) {
+            logger.error(`[ORDER] Stop-loss: No orderId in response. Full response:`, JSON.stringify(responseData));
+            return null;
+        }
+        
+        logger.success(`[ORDER] Stop-loss at ${stopPrice} for ${quantity} ${symbol} - Order ID: ${orderId}`);
+        
+        return {
+            ...responseData,
+            orderId: orderId
+        };
+    } catch (error) {
+        logger.error(`[ORDER] Exception placing stop-loss:`, {
+            error: error.message,
+            responseStatus: error.response?.status,
+            responseData: error.response?.data,
+            symbol: symbol,
+            stopPrice: stopPrice
+        });
+        return null;
+    }
+}
+
+async function placeTakeProfitOrder(symbol, side, quantity, price) {
+    // Paper trading mode - simulate order execution
+    if (CONFIG.BINANCE.PAPER_TRADING_MODE) {
+        try {
+            const timestamp = new Date().toISOString();
+            const orderId = `PAPER_TP_${Date.now()}`;
+            const trade = {
+                orderId: orderId,
+                symbol: symbol,
+                side: side,
+                quantity: parseFloat(quantity),
+                type: 'LIMIT',
+                price: parseFloat(price),
+                status: 'NEW',
+                timestamp: timestamp
+            };
+            
+            paperTrades.push(trade);
+            logger.info(`[PAPER TRADE] Take-profit order placed: ${side} ${quantity} ${symbol} @ ${price}`);
+            
+            return {
+                orderId: orderId,
+                symbol: symbol,
+                side: side,
+                type: 'LIMIT',
+                status: 'NEW',
+                price: parseFloat(price)
+            };
+        } catch (error) {
+            logger.error('[PAPER TRADE ERROR]', error.message);
+            return null;
+        }
+    }
+    
+    try {
+        // 🔴 BUG FIX: Ensure quantity is a NUMBER, not a string
+        let parsedQuantity;
+        if (typeof quantity === 'string') {
+            parsedQuantity = parseFloat(quantity);
+        } else if (typeof quantity === 'number') {
+            parsedQuantity = quantity;
+        } else {
+            logger.error(`[ORDER] ❌ Invalid quantity type for take-profit: ${typeof quantity}`);
+            return null;
+        }
+        
+        if (isNaN(parsedQuantity) || parsedQuantity <= 0) {
+            logger.error(`[ORDER] ❌ Invalid quantity value for take-profit: ${parsedQuantity}`);
+            return null;
+        }
+        
+        // 🔴 BUG FIX: Ensure price is a NUMBER, not a string or "BUY"/"SELL"
+        let parsedPrice;
+        if (typeof price === 'string') {
+            // Check if it's accidentally "BUY" or "SELL" instead of a price
+            if (price === 'BUY' || price === 'SELL') {
+                logger.error(`[ORDER] ❌ CRITICAL BUG: Price parameter is "${price}" instead of numeric price!`);
+                logger.error(`[ORDER] This indicates the wrong parameter was passed to placeTakeProfitOrder()`);
+                return null;
+            }
+            parsedPrice = parseFloat(price);
+        } else if (typeof price === 'number') {
+            parsedPrice = price;
+        } else {
+            logger.error(`[ORDER] ❌ Invalid price type: ${typeof price}`);
+            return null;
+        }
+        
+        if (isNaN(parsedPrice) || parsedPrice <= 0) {
+            logger.error(`[ORDER] ❌ Invalid price value: ${parsedPrice}`);
+            return null;
+        }
+        
+        // Get symbol precision and format quantity
+        const precision = await getSymbolPrecision(symbol);
+        const formattedQuantity = formatQuantity(parsedQuantity, symbol);
+        
+        // Format price to proper precision
+        const formattedPrice = parseFloat(parsedPrice.toFixed(precision.pricePrecision));
+        
+        // Build query string - ensure all values are proper types
+        const timestamp = Date.now();
+        let queryString = `symbol=${String(symbol).toUpperCase()}&side=${String(side).toUpperCase()}&type=LIMIT&timeInForce=GTC&price=${formattedPrice}&quantity=${formattedQuantity}&timestamp=${timestamp}`;
+        
+        logger.info(`[ORDER] Take-profit parameters (types):`, {
+            quantity: `${formattedQuantity} (${typeof formattedQuantity})`,
+            price: `${formattedPrice} (${typeof formattedPrice})`
+        });
+        
+        // Add positionSide if in HEDGE mode
+        if (positionMode === 'HEDGE') {
+            const positionSide = side === 'BUY' ? 'LONG' : 'SHORT';
+            queryString += `&positionSide=${positionSide}`;
+        }
+        
+        const signature = signRequest(queryString);
+        
+        logger.info(`[ORDER] Placing take-profit order:`, {
+            symbol: symbol,
+            side: side,
+            quantity: formattedQuantity,
+            price: formattedPrice,
+            type: 'LIMIT',
+            positionMode: positionMode
+        });
+        
+        const response = await safeAPICall(async () => {
+            return await axios.post(
+                `${CONFIG.BINANCE.FUTURES_API}/order?${queryString}&signature=${signature}`,
+                null,
+                {
+                    headers: { 
+                        'X-MBX-APIKEY': CONFIG.BINANCE.API_KEY,
+                        'Content-Type': 'application/json'
+                    },
+                    validateStatus: function (status) {
+                        return status < 500;
+                    },
+                    timeout: 10000
+                }
+            );
+        });
+        
+        if (!response) {
+            logger.error(`[ORDER] ❌ Take-profit order failed - rate limit or network error`);
+            return null;
+        }
+        
+        // Log raw response
+        logger.info(`[ORDER] Take-profit response status: ${response.status}`);
+        logger.info(`[ORDER] Take-profit response:`, JSON.stringify(response.data).substring(0, 500));
+        
+        if (response.status < 200 || response.status >= 300) {
+            logger.error(`[ORDER] Take-profit HTTP error status ${response.status}:`, response.data);
+            return null;
+        }
+        
+        // Handle string responses
+        let responseData = response.data;
+        if (typeof responseData === 'string') {
+            try {
+                responseData = JSON.parse(responseData);
+            } catch (e) {
+                logger.error(`[ORDER] Take-profit: Failed to parse JSON string:`, e.message);
+                logger.error(`[ORDER] Take-profit string content:`, responseData.substring(0, 500));
+                return null;
+            }
+        }
+        
+        if (!responseData || (typeof responseData === 'string' && responseData.trim() === '')) {
+            logger.error(`[ORDER] Empty take-profit response from API`);
+            return null;
+        }
+        
+        // Check for Binance error codes
+        if (responseData.code && responseData.code < 0) {
+            logger.error(`[ORDER] Take-profit Binance API Error:`, {
+                code: responseData.code,
+                msg: responseData.msg
+            });
+            return null;
+        }
+        
+        const orderId = responseData.orderId || responseData.id || responseData.clientOrderId || responseData.orderListId;
+        
+        if (!orderId) {
+            logger.error(`[ORDER] Take-profit: No orderId in response. Full response:`, JSON.stringify(responseData));
+            return null;
+        }
+        
+        logger.success(`[ORDER] Take-profit at ${price} for ${quantity} ${symbol} - Order ID: ${orderId}`);
+        
+        return {
+            ...responseData,
+            orderId: orderId
+        };
+    } catch (error) {
+        logger.error(`[ORDER] Exception placing take-profit:`, {
+            error: error.message,
+            responseStatus: error.response?.status,
+            responseData: error.response?.data,
+            symbol: symbol,
+            price: price
+        });
+        return null;
+    }
+}
+
+// ============================================
+// STATE MANAGEMENT
+// ============================================
+let priceHistory = { btc: [], eth: [] };
+let candleHistory = {
+    btc: { '1m': [], '5m': [], '15m': [] },
+    eth: { '1m': [], '5m': [], '15m': [] }
+};
+let currentPrices = { btc: 0, eth: 0 };
+let activeTrades = { btc: null, eth: null };
+let riskMode = 'conservative';
+let marketCondition = 'RANGING';
+let volatilityLevel = 'NORMAL';
+let lastSignalTime = { btc: 0, eth: 0 };
+
+const tradeDatabase = {
+    trades: [],
+    activeTrades: { btc: null, eth: null },
+    performance: {
+        totalTrades: 0, winners: 0, losers: 0, breakevenTrades: 0,
+        totalProfit: 0, winRate: 0, profitFactor: 0, avgWin: 0, avgLoss: 0, breakevenRate: 0
+    },
+    patterns: {}
+};
+let fvgInsufficientLogged = { btc: false, eth: false };
+
+// ============================================
+// DATA PERSISTENCE
+// ============================================
+async function ensureDataDir() {
+    const dataDir = path.dirname(CONFIG.DATA_FILE);
+    const logDir = path.dirname(CONFIG.LOG_FILE);
+    try {
+        await fs.mkdir(dataDir, { recursive: true });
+        await fs.mkdir(logDir, { recursive: true });
+    } catch (err) {
+        logger.error('Failed to create directories', { error: err.message });
+    }
+}
+
+async function loadTradeData() {
+    try {
+        logger.info('[TRADE DATA] Loading trade data from disk...');
+        const data = await fs.readFile(CONFIG.DATA_FILE, 'utf8');
+        const parsed = JSON.parse(data);
+        Object.assign(tradeDatabase, parsed);
+        activeTrades = parsed.activeTrades || { btc: null, eth: null };
+        
+        // Log loaded active trades
+        const activeTradeCount = Object.keys(activeTrades).filter(k => activeTrades[k]).length;
+        logger.info('[TRADE DATA] Trade data loaded', { 
+            totalTrades: tradeDatabase.trades.length,
+            activeTrades: activeTradeCount
+        });
+        
+        // Log details of active trades
+        if (activeTradeCount > 0) {
+            logger.warn(`[TRADE DATA] ⚠️  Found ${activeTradeCount} active trades in database:`);
+            for (const [asset, trade] of Object.entries(activeTrades)) {
+                if (trade) {
+                    logger.warn(`[TRADE DATA]   - ${asset.toUpperCase()}: Entry Order ID: ${trade.entryOrderId || 'NONE'}, Status: ${trade.status || 'UNKNOWN'}`);
+                }
+                }
+        } else {
+            logger.info('[TRADE DATA] ✅ No active trades in database - starting fresh');
+        }
+        
+        return true;
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            logger.info('[TRADE DATA] No existing trade data - starting fresh');
+            return true;
+        }
+        logger.error('[TRADE DATA] Failed to load trade data', { error: err.message });
+        return false;
+    }
+}
+
+// ============================================================================
+// FIX #2: Clear Phantom Trade Data
+// ============================================================================
+
+async function clearPhantomTrades() {
+    logger.info(`\n${'='.repeat(80)}`);
+    logger.info(`[PHANTOM TRADE CLEANUP] 🧹 Starting phantom trade cleanup...`);
+    logger.info(`${'='.repeat(80)}`);
+    
+    let cleanedCount = 0;
+    const cleanedTrades = [];
+    
+    // Check each active trade
+    for (const [asset, trade] of Object.entries(activeTrades)) {
+        if (!trade) continue;
+        
+        logger.info(`[PHANTOM TRADE CLEANUP] Checking ${asset.toUpperCase()} trade...`);
+        
+        // Criteria for phantom trades:
+        // 1. No valid order ID
+        // 2. Order ID is 'PENDING' or empty
+        // 3. Trade is older than 24 hours without order ID
+        // 4. Trade has no entryOrderId at all
+        
+        const hasInvalidOrderId = !trade.entryOrderId || 
+                                  trade.entryOrderId === 'PENDING' || 
+                                  trade.entryOrderId === 'N/A' ||
+                                  trade.entryOrderId === '';
+        
+        const isOldTrade = trade.timestamp && (Date.now() - trade.timestamp > 24 * 60 * 60 * 1000);
+        const isOldWithoutOrderId = isOldTrade && hasInvalidOrderId;
+        
+        if (hasInvalidOrderId || isOldWithoutOrderId) {
+            logger.warn(`[PHANTOM TRADE CLEANUP] ⚠️  Phantom trade detected for ${asset.toUpperCase()}:`, {
+                entryOrderId: trade.entryOrderId || 'MISSING',
+                status: trade.status || 'UNKNOWN',
+                age: trade.timestamp ? `${Math.round((Date.now() - trade.timestamp) / 1000 / 60)} minutes` : 'UNKNOWN',
+                reason: hasInvalidOrderId ? 'Invalid/Missing Order ID' : 'Old trade without order ID'
+            });
+            
+            // Verify on Binance if we have an order ID
+            if (trade.entryOrderId && trade.entryOrderId !== 'PENDING' && trade.entryOrderId !== 'N/A') {
+                const symbol = asset === 'btc' ? 'BTCUSDT' : 'ETHUSDT';
+                const verified = await verifyOrderOnBinance(symbol, trade.entryOrderId);
+                if (!verified) {
+                    logger.warn(`[PHANTOM TRADE CLEANUP] ❌ Order ${trade.entryOrderId} not found on Binance - marking as phantom`);
+                    activeTrades[asset] = null;
+                    tradeDatabase.activeTrades[asset] = null;
+                    cleanedTrades.push({ asset, reason: 'Order not found on Binance', orderId: trade.entryOrderId });
+                    cleanedCount++;
+                } else {
+                    logger.info(`[PHANTOM TRADE CLEANUP] ✅ Order ${trade.entryOrderId} verified on Binance - keeping trade`);
+                }
+            } else {
+                // No valid order ID - definitely a phantom
+                logger.warn(`[PHANTOM TRADE CLEANUP] ❌ No valid order ID - removing phantom trade`);
+                activeTrades[asset] = null;
+                tradeDatabase.activeTrades[asset] = null;
+                cleanedTrades.push({ asset, reason: 'No valid order ID', orderId: trade.entryOrderId || 'NONE' });
+                cleanedCount++;
+            }
+        } else {
+            logger.info(`[PHANTOM TRADE CLEANUP] ✅ ${asset.toUpperCase()} trade appears valid`);
+        }
+    }
+    
+    // Also check accountState.openPositions for consistency
+    if (accountState.openPositions && accountState.openPositions.length > 0) {
+        logger.info(`[PHANTOM TRADE CLEANUP] Checking ${accountState.openPositions.length} positions in accountState...`);
+        const validPositions = [];
+        
+        for (const position of accountState.openPositions) {
+            const asset = position.asset || (position.symbol === 'BTCUSDT' ? 'btc' : 'eth');
+            const activeTrade = activeTrades[asset];
+            
+            if (!activeTrade || !activeTrade.entryOrderId || activeTrade.entryOrderId === 'PENDING') {
+                logger.warn(`[PHANTOM TRADE CLEANUP] Removing orphaned position:`, position);
+            } else {
+                validPositions.push(position);
+            }
+        }
+        
+        accountState.openPositions = validPositions;
+        logger.info(`[PHANTOM TRADE CLEANUP] Kept ${validPositions.length} valid positions`);
+    }
+    
+    if (cleanedCount > 0) {
+        logger.warn(`[PHANTOM TRADE CLEANUP] 🧹 Cleaned ${cleanedCount} phantom trades:`, cleanedTrades);
+        await saveTradeData();
+        logger.info(`[PHANTOM TRADE CLEANUP] ✅ Trade data saved after cleanup`);
+    } else {
+        logger.success(`[PHANTOM TRADE CLEANUP] ✅ No phantom trades found`);
+    }
+    
+    logger.info(`${'='.repeat(80)}\n`);
+    return cleanedCount;
+}
+
+async function saveTradeData() {
+    try {
+        await ensureDataDir();
+        const dataToSave = {
+            ...tradeDatabase,
+            activeTrades: activeTrades,
+            timestamp: Date.now()
+        };
+        await fs.writeFile(CONFIG.DATA_FILE, JSON.stringify(dataToSave, null, 2), 'utf8');
+        return true;
+    } catch (err) {
+        logger.error('Failed to save trade data', { error: err.message });
+        return false;
+    }
+}
+
+// ============================================
+// PRICE MONITORING (WebSocket)
+// ============================================
+let ws = null;
+let reconnectAttempts = 0;
+
+function getAssetKey(symbol = '') {
+    const lower = symbol.toLowerCase();
+    if (lower.startsWith('btc')) return 'btc';
+    if (lower.startsWith('eth')) return 'eth';
+    return null;
+}
+
+function connectBinance() {
+    try {
+        ws = new WebSocket(WS_URL);
+        ws.on('open', () => {
+            logger.success('Binance WebSocket connected');
+            reconnectAttempts = 0;
+        });
+        ws.on('message', (data) => {
+            try {
+                const raw = JSON.parse(data.toString());
+                const msg = raw.stream ? raw.data : raw;
+                if (!msg) return;
+
+                if (msg.e === '24hrTicker') {
+                    const asset = getAssetKey(msg.s);
+                    if (asset) updatePrice(asset, msg);
+                } else if (msg.e === 'kline') {
+                    handleKlineUpdate(msg);
+                }
+            } catch (error) {
+                logger.error('WebSocket message error', { error: error.message });
+            }
+        });
+        ws.on('error', (err) => {
+            logger.error('WebSocket error', { error: err.message });
+        });
+        ws.on('close', () => {
+            logger.warn('WebSocket closed - reconnecting');
+            reconnect();
+        });
+    } catch (e) {
+        logger.error('WebSocket connection failed', { error: e.message });
+        startFallback();
+    }
+}
+
+function reconnect() {
+    if (reconnectAttempts < 5) {
+        reconnectAttempts++;
+        setTimeout(() => connectBinance(), 3000);
+    } else {
+        startFallback();
+    }
+}
+
+function startFallback() {
+    logger.warn('Using fallback price API');
+    setInterval(async () => {
+        try {
+            const [btcRes, ethRes] = await Promise.all([
+                axios.get(`${BINANCE_API_URL}?symbol=BTCUSDT`),
+                axios.get(`${BINANCE_API_URL}?symbol=ETHUSDT`)
+            ]);
+            if (btcRes.data) updatePrice('btc', { c: btcRes.data.price, P: 0 });
+            if (ethRes.data) updatePrice('eth', { c: ethRes.data.price, P: 0 });
+        } catch (e) {
+            logger.error('Fallback price fetch failed', { error: e.message });
+        }
+    }, 5000);
+}
+
+function recordPriceSnapshot(asset, previousPrice, newPrice, timestamp = Date.now()) {
+    if (!priceHistory[asset]) priceHistory[asset] = [];
+    const safePrev = (typeof previousPrice === 'number' && previousPrice > 0) ? previousPrice : newPrice;
+    const change = safePrev > 0 ? ((newPrice - safePrev) / safePrev) * 100 : 0;
+    priceHistory[asset].push({ price: newPrice, change, time: timestamp });
+    if (priceHistory[asset].length > 50) priceHistory[asset].shift();
+}
+
+function updatePrice(asset, data) {
+    const price = parseFloat(data.c || data.lastPrice);
+    if (!Number.isFinite(price) || price <= 0) return;
+    
+    const previous = currentPrices[asset] || price;
+    currentPrices[asset] = price;
+    recordPriceSnapshot(asset, previous, price);
+}
+
+function handleKlineUpdate(message) {
+    const asset = getAssetKey(message.s);
+    if (!asset || !message.k) return;
+
+    const k = message.k;
+    const timeframe = k.i || '1m';
+    if (!KLINE_INTERVALS.includes(timeframe)) return;
+
+    const candle = {
+        open: parseFloat(k.o),
+        high: parseFloat(k.h),
+        low: parseFloat(k.l),
+        close: parseFloat(k.c),
+        timestamp: k.T || k.t || Date.now(),
+        closed: k.x === true
+    };
+
+    if (!candleHistory[asset]) {
+        candleHistory[asset] = {};
+    }
+    if (!candleHistory[asset][timeframe]) {
+        candleHistory[asset][timeframe] = [];
+    }
+    const history = candleHistory[asset][timeframe];
+    const lastIndex = history.length - 1;
+    const existing = lastIndex >= 0 ? history[lastIndex] : null;
+
+    if (existing && existing.timestamp === candle.timestamp) {
+        history[lastIndex] = candle;
+    } else if (candle.closed) {
+        history.push(candle);
+    } else if (!existing || existing.closed) {
+        history.push(candle);
+    } else {
+        history[lastIndex] = candle;
+    }
+
+    if (history.length > MAX_CANDLES_STORED) {
+        const excess = history.length - MAX_CANDLES_STORED;
+        history.splice(0, excess);
+    }
+
+    if (timeframe === '1m') {
+        currentPrices[asset] = candle.close;
+        
+        if (candle.closed) {
+            const prevClose = history.length > 1 ? history[history.length - 2].close : candle.open;
+            recordPriceSnapshot(asset, prevClose, candle.close, candle.timestamp);
+        }
+    }
+}
+
+async function backfillCandles() {
+    const tasks = [];
+    
+    for (const [asset, symbol] of Object.entries(SYMBOLS)) {
+        for (const interval of KLINE_INTERVALS) {
+            tasks.push((async () => {
+                try {
+                    const response = await axios.get(BINANCE_KLINE_URL, {
+                        params: {
+                            symbol,
+                            interval,
+                            limit: Math.min(MAX_CANDLES_STORED, 500)
+                        },
+                        timeout: 5000
+                    });
+                    const klines = Array.isArray(response.data) ? response.data : [];
+                    const candles = klines.map(k => ({
+                        open: parseFloat(k[1]),
+                        high: parseFloat(k[2]),
+                        low: parseFloat(k[3]),
+                        close: parseFloat(k[4]),
+                        timestamp: k[6],
+                        closed: true
+                    })).filter(c => Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close));
+                    
+                    if (candles.length > 0) {
+                        if (!candleHistory[asset]) {
+                            candleHistory[asset] = {};
+                        }
+                        candleHistory[asset][interval] = candles.slice(-MAX_CANDLES_STORED);
+                        
+                        if (interval === '1m') {
+                            currentPrices[asset] = candles[candles.length - 1].close;
+                            
+                            const recentForHistory = candleHistory[asset][interval].slice(-50);
+                            priceHistory[asset] = [];
+                            for (let i = 0; i < recentForHistory.length; i++) {
+                                const prev = i > 0 ? recentForHistory[i - 1].close : recentForHistory[i].open;
+                                recordPriceSnapshot(asset, prev, recentForHistory[i].close, recentForHistory[i].timestamp);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    logger.error('Failed to backfill candles', { asset, interval, error: error.message });
+                }
+            })());
+        }
+    }
+    
+    await Promise.all(tasks);
+}
+
+// ============================================
+// MARKET ANALYSIS
+// ============================================
+function detectMarketCondition() {
+    ['btc', 'eth'].forEach(asset => {
+        if (priceHistory[asset] && priceHistory[asset].length >= 5) {
+            const recent = priceHistory[asset].slice(-5);
+            const trend = recent[recent.length - 1].price - recent[0].price;
+            const avgChange = recent.reduce((sum, p) => sum + Math.abs(p.change || 0), 0) / recent.length;
+            
+            if (trend > currentPrices[asset] * 0.02) marketCondition = 'TRENDING_UP';
+            else if (trend < -currentPrices[asset] * 0.02) marketCondition = 'TRENDING_DOWN';
+            else marketCondition = 'RANGING';
+            
+            if (avgChange > 2.0) volatilityLevel = 'EXTREME';
+            else if (avgChange > 1.5) volatilityLevel = 'HIGH';
+            else if (avgChange > 0.8) volatilityLevel = 'NORMAL';
+            else volatilityLevel = 'LOW';
+        }
+    });
+}
+
+function detectVolatility() {
+    const currentVol = Math.max(
+        Math.abs(priceHistory.btc.slice(-1)[0]?.change || 0),
+        Math.abs(priceHistory.eth.slice(-1)[0]?.change || 0)
+    );
+    return currentVol;
+}
+
+function calculateMomentum(asset) {
+    if (!priceHistory[asset] || priceHistory[asset].length < 3) {
+        return Math.random() > 0.5 ? 1 : -1;
+    }
+    const recent = priceHistory[asset].slice(-3);
+    const avgChange = recent.reduce((sum, p) => sum + (p.change || 0), 0) / recent.length;
+    return Math.max(-2, Math.min(2, avgChange / 2));
+}
+
+function detectSessionBias(currentTime) {
+    const date = new Date(currentTime);
+    const hour = date.getUTCHours();
+    let sessionName = 'CLOSED', confidenceBoost = 0;
+    if (hour >= 21 || hour < 6) { sessionName = 'TOKYO'; confidenceBoost = 18; }
+    else if (hour >= 7 && hour < 16) { sessionName = 'LONDON'; confidenceBoost = 5; }
+    else if (hour >= 12 && hour < 21) { sessionName = 'NEW_YORK'; confidenceBoost = 5; }
+    else if (hour >= 22 || hour < 7) { sessionName = 'SYDNEY'; confidenceBoost = 2; }
+    return { sessionName, confidenceBoost };
+}
+
+function detectVolatilityLevel(priceHistoryData, lookbackPeriod = 20) {
+    if (!priceHistoryData || priceHistoryData.length < lookbackPeriod) {
+        return { volatilityLevel: 'NORMAL', atr: 0, confidenceBoost: 2 };
+    }
+    let sum = 0;
+    for (let i = 1; i < Math.min(lookbackPeriod, priceHistoryData.length); i++) {
+        const currentPrice = priceHistoryData[i].price;
+        const prevPrice = priceHistoryData[i - 1].price;
+        const change = Math.abs(currentPrice - prevPrice);
+        sum += change;
+    }
+    const atr = sum / (Math.min(lookbackPeriod, priceHistoryData.length) - 1);
+    const currentPrice = priceHistoryData[priceHistoryData.length - 1].price;
+    const atrPerc = 100 * (atr / currentPrice);
+    let level = 'NORMAL', confidenceBoost = 2;
+    if (atrPerc > 1.2) { level = 'EXTREME'; confidenceBoost = 10; }
+    else if (atrPerc > 0.8) { level = 'HIGH'; confidenceBoost = 6; }
+    else if (atrPerc < 0.4) { level = 'LOW'; confidenceBoost = -5; }
+    return { volatilityLevel: level, atr, confidenceBoost };
+}
+
+function detectTrendCondition(priceHistoryData, trendLookback = 50) {
+    if (!priceHistoryData || priceHistoryData.length < trendLookback) {
+        return { trendType: 'RANGING', confidenceBoost: 0 };
+    }
+    let prices = [];
+    for (let i = 0; i < Math.min(trendLookback, priceHistoryData.length); i++) {
+        prices.push(priceHistoryData[i].price);
+    }
+    const highestPrice = Math.max(...prices);
+    const lowestPrice = Math.min(...prices);
+    const currentPrice = priceHistoryData[priceHistoryData.length - 1].price;
+    const priceRange = highestPrice - lowestPrice;
+    const trendStrength = priceRange > 0 ? ((currentPrice - lowestPrice) / priceRange) * 100 : 50;
+    
+    let trendType = 'RANGING', confidenceBoost = 0;
+    if (trendStrength > 70) { trendType = 'BULLISH'; confidenceBoost = 8; }
+    else if (trendStrength < 30) { trendType = 'BEARISH'; confidenceBoost = 8; }
+    
+    return { trendType, confidenceBoost };
+}
+
+// ============================================
+// SMC DETECTION FUNCTIONS
+// ============================================
+function calculateATR(candles, period = 14) {
+    if (!candles || candles.length < period + 1) return null;
+    
+    let trueRanges = [];
+    for (let i = 1; i < candles.length; i++) {
+        const high = candles[i].high;
+        const low = candles[i].low;
+        const prevClose = candles[i - 1].close;
+        const tr = Math.max(
+            high - low,
+            Math.abs(high - prevClose),
+            Math.abs(low - prevClose)
+        );
+        trueRanges.push(tr);
+    }
+    
+    const recentTRs = trueRanges.slice(-period);
+    return recentTRs.reduce((sum, tr) => sum + tr, 0) / period;
+}
+
+function calculateEMA(prices, period) {
+    if (!Array.isArray(prices) || prices.length < period) {
+        return null;
+    }
+    
+    const smoothingFactor = 2 / (period + 1);
+    let ema = prices[0];
+    
+    for (let i = 1; i < prices.length; i++) {
+        ema = (prices[i] * smoothingFactor) + (ema * (1 - smoothingFactor));
+    }
+    
+    return ema;
+}
+
+function getHigherTimeframeBias(asset) {
+    const htfCandles = getRecentCandles(asset, 50, '15m');
+    
+    if (!htfCandles || htfCandles.length < 20) {
+        return { bias: 'neutral', strength: 0, confidence: 'low' };
+    }
+    
+    const closes = htfCandles.map(c => c.close);
+    const ema20 = calculateEMA(closes, 20);
+    const ema50 = calculateEMA(closes, 50);
+    
+    if (ema20 === null || ema50 === null) {
+        return { bias: 'neutral', strength: 0, confidence: 'low' };
+    }
+    
+    let bias = 'neutral';
+    let strength = 0;
+    let confidence = 'low';
+    
+    if (ema20 > ema50 * 1.002) {
+        bias = 'bullish';
+        strength = ((ema20 - ema50) / ema50) * 100;
+        confidence = strength > 0.5 ? 'high' : 'medium';
+    } else if (ema20 < ema50 * 0.998) {
+        bias = 'bearish';
+        strength = ((ema50 - ema20) / ema50) * 100;
+        confidence = strength > 0.5 ? 'high' : 'medium';
+    }
+    
+    return { bias, strength, confidence };
+}
+
+function detectFVGOnHigherTimeframe(asset) {
+    const fvgCandles = getRecentCandles(asset, 60, '5m');
+    
+    // Check if we have enough candles
+    if (!fvgCandles || fvgCandles.length < 20) {
+        if (!fvgInsufficientLogged[asset]) {
+            logger.warn(`[${asset.toUpperCase()}] Insufficient 5m candles for FVG detection`, {
+                available: fvgCandles ? fvgCandles.length : 0,
+                required: 20,
+                note: 'Need at least 20 5m candles (100 minutes) for reliable FVG detection'
+            });
+            fvgInsufficientLogged[asset] = true;
+        }
+        return { bullishFVGs: [], bearishFVGs: [], totalDetected: 0, bestFVG: null };
+    }
+    
+    // Reset the insufficient flag once we have enough candles
+    if (fvgInsufficientLogged[asset]) {
+        logger.info(`[${asset.toUpperCase()}] Sufficient 5m candles now available`, {
+            count: fvgCandles.length
+        });
+        fvgInsufficientLogged[asset] = false;
+    }
+    
+    // Use the most recent 50 candles for FVG detection
+    const recentCandles = fvgCandles.slice(-50);
+    const fvgResult = detectFairValueGaps(recentCandles, asset);
+    
+    // Calculate total detected FVGs
+    const totalDetected = (fvgResult?.bullishFVGs?.length || 0) + (fvgResult?.bearishFVGs?.length || 0);
+    
+    // If FVGs were detected, find the best one and log
+    if (totalDetected > 0) {
+        const currentPrice = currentPrices[asset] || recentCandles[recentCandles.length - 1]?.close || 0;
+        const bestFVG = getBestFairValueGap(fvgResult, currentPrice);
+        
+        logger.info(`[${asset.toUpperCase()}] FVG detected on 5m`, {
+            bullish: fvgResult.bullishFVGs?.length || 0,
+            bearish: fvgResult.bearishFVGs?.length || 0,
+            bestQuality: bestFVG?.qualityScore || null,
+            bestType: bestFVG?.type || null,
+            bestTop: bestFVG?.top || null,
+            bestBottom: bestFVG?.bottom || null
+        });
+        
+        return { 
+            ...fvgResult, 
+            totalDetected, 
+            bestFVG 
+        };
+    }
+    
+    // No FVGs detected - return empty result
+    return { 
+        bullishFVGs: [], 
+        bearishFVGs: [], 
+        totalDetected: 0, 
+        bestFVG: null 
+    };
+}
+
+function findSwingHighs(candles, lookback = 5) {
+    if (!candles || candles.length < (lookback * 2 + 1)) return [];
+    
+    let swingHighs = [];
+    for (let i = lookback; i < candles.length - lookback; i++) {
+        const currentHigh = candles[i].high;
+        let isSwingHigh = true;
+        
+        for (let j = i - lookback; j < i; j++) {
+            if (candles[j].high >= currentHigh) {
+                isSwingHigh = false;
+                break;
+            }
+        }
+        
+        if (isSwingHigh) {
+            for (let j = i + 1; j <= i + lookback; j++) {
+                if (candles[j].high >= currentHigh) {
+                    isSwingHigh = false;
+                    break;
+                }
+            }
+        }
+        
+        if (isSwingHigh) {
+            swingHighs.push({
+                price: currentHigh,
+                index: i,
+                timestamp: candles[i].timestamp || Date.now(),
+                broken: false
+            });
+        }
+    }
+    
+    return swingHighs;
+}
+
+function findSwingLows(candles, lookback = 5) {
+    if (!candles || candles.length < (lookback * 2 + 1)) return [];
+    
+    let swingLows = [];
+    for (let i = lookback; i < candles.length - lookback; i++) {
+        const currentLow = candles[i].low;
+        let isSwingLow = true;
+        
+        for (let j = i - lookback; j < i; j++) {
+            if (candles[j].low <= currentLow) {
+                isSwingLow = false;
+                break;
+            }
+        }
+        
+        if (isSwingLow) {
+            for (let j = i + 1; j <= i + lookback; j++) {
+                if (candles[j].low <= currentLow) {
+                    isSwingLow = false;
+                    break;
+                }
+            }
+        }
+        
+        if (isSwingLow) {
+            swingLows.push({
+                price: currentLow,
+                index: i,
+                timestamp: candles[i].timestamp || Date.now(),
+                broken: false
+            });
+        }
+    }
+    
+    return swingLows;
+}
+
+function detectOrderBlocks(candles, asset, currentTimeframe = '5m') {
+    if (!candles || candles.length < 20) {
+        return { bullishOBs: [], bearishOBs: [] };
+    }
+    
+    const atr = calculateATR(candles, 14);
+    if (!atr) return { bullishOBs: [], bearishOBs: [] };
+    
+    const avgPrice = candles[candles.length - 1].close;
+    const displacementThreshold = atr * 1.5;
+    
+    let bullishOBs = [];
+    let bearishOBs = [];
+    const scanStart = Math.max(0, candles.length - 50);
+    
+    for (let i = scanStart; i < candles.length - 5; i++) {
+        let displacementSize = 0;
+        let displacementEnd = Math.min(i + 5, candles.length - 1);
+        
+        for (let j = i + 1; j <= displacementEnd; j++) {
+            displacementSize += Math.abs(candles[j].close - candles[j - 1].close);
+        }
+        
+        if (displacementSize < displacementThreshold) continue;
+        
+        const startPrice = candles[i].close;
+        const endPrice = candles[displacementEnd].close;
+        const isBullishDisplacement = endPrice > startPrice;
+        
+        let oppositeCandle = null;
+        
+        if (isBullishDisplacement) {
+            for (let j = i; j >= Math.max(0, i - 10); j--) {
+                const isBearishCandle = candles[j].close < candles[j].open;
+                const bodySize = Math.abs(candles[j].close - candles[j].open);
+                const totalRange = candles[j].high - candles[j].low;
+                const bodyRatio = bodySize / totalRange;
+                
+                if (isBearishCandle && bodyRatio >= 0.4) {
+                    oppositeCandle = candles[j];
+                    oppositeCandle.index = j;
+                    break;
+                }
+            }
+            
+            if (oppositeCandle) {
+                const ob = {
+                    id: `bull_ob_${Date.now()}_${i}`,
+                    type: 'bullish',
+                    high: oppositeCandle.high,
+                    low: oppositeCandle.low,
+                    timestamp: oppositeCandle.timestamp || Date.now(),
+                    candleIndex: oppositeCandle.index,
+                    displacementSize: displacementSize,
+                    freshnessStatus: 'fresh',
+                    valid: true,
+                    testedCount: 0
+                };
+                // Calculate quality score after object is created
+                ob.qualityScore = calculateOBQuality(ob, candles, atr, currentTimeframe);
+                bullishOBs.push(ob);
+            }
+        } else {
+            for (let j = i; j >= Math.max(0, i - 10); j--) {
+                const isBullishCandle = candles[j].close > candles[j].open;
+                const bodySize = Math.abs(candles[j].close - candles[j].open);
+                const totalRange = candles[j].high - candles[j].low;
+                const bodyRatio = bodySize / totalRange;
+                
+                if (isBullishCandle && bodyRatio >= 0.4) {
+                    oppositeCandle = candles[j];
+                    oppositeCandle.index = j;
+                    break;
+                }
+            }
+            
+            if (oppositeCandle) {
+                const ob = {
+                    id: `bear_ob_${Date.now()}_${i}`,
+                    type: 'bearish',
+                    high: oppositeCandle.high,
+                    low: oppositeCandle.low,
+                    timestamp: oppositeCandle.timestamp || Date.now(),
+                    candleIndex: oppositeCandle.index,
+                    displacementSize: displacementSize,
+                    freshnessStatus: 'fresh',
+                    valid: true,
+                    testedCount: 0
+                };
+                // Calculate quality score after object is created
+                ob.qualityScore = calculateOBQuality(ob, candles, atr, currentTimeframe);
+                bearishOBs.push(ob);
+            }
+        }
+    }
+    
+    return {
+        bullishOBs: bullishOBs,
+        bearishOBs: bearishOBs,
+        totalDetected: bullishOBs.length + bearishOBs.length
+    };
+}
+
+function calculateOBQuality(ob, candles, atr, timeframe) {
+    let score = 0;
+    
+    if (ob.freshnessStatus === 'fresh') {
+        score += 30;
+    } else if (ob.testedCount === 1) {
+        score += 15;
+    } else {
+        score += 5;
+    }
+    
+    const avgCandleRange = atr;
+    const displacementRatio = ob.displacementSize / avgCandleRange;
+    
+    if (displacementRatio > 3.0) {
+        score += 40;
+    } else if (displacementRatio > 2.5) {
+        score += 30;
+    } else if (displacementRatio > 2.0) {
+        score += 20;
+    } else {
+        score += 10;
+    }
+    
+    const hour = new Date(ob.timestamp).getUTCHours();
+    if ((hour >= 13 && hour <= 16) || (hour >= 0 && hour <= 2) || (hour >= 8 && hour <= 10)) {
+        score += 30;
+    } else {
+        score += 10;
+    }
+    
+    return Math.min(score, 100);
+}
+
+function detectFairValueGaps(candles, asset) {
+    if (!candles || candles.length < 10) {
+        return { bullishFVGs: [], bearishFVGs: [] };
+    }
+    
+    const atr = calculateATR(candles, 14);
+    if (!atr) return { bullishFVGs: [], bearishFVGs: [] };
+    
+    const minGapSize = atr * 0.5;
+    let bullishFVGs = [];
+    let bearishFVGs = [];
+    const scanStart = Math.max(0, candles.length - 30);
+    
+    for (let i = scanStart + 1; i < candles.length - 1; i++) {
+        const candle1 = candles[i - 1];
+        const candle2 = candles[i];
+        const candle3 = candles[i + 1];
+        
+        if (candle1.high < candle3.low) {
+            const gapSize = candle3.low - candle1.high;
+            
+            if (gapSize >= minGapSize) {
+                const middleBody = Math.abs(candle2.close - candle2.open);
+                const avgRange = atr;
+                
+                if (middleBody >= avgRange * 1.5) {
+                    const isMiddleBullish = candle2.close > candle2.open;
+                    
+                    if (isMiddleBullish) {
+                        const fvg = {
+                            id: `bull_fvg_${Date.now()}_${i}`,
+                            type: 'bullish',
+                            top: candle3.low,
+                            bottom: candle1.high,
+                            size: gapSize,
+                            middleCandleIndex: i,
+                            timestamp: candle2.timestamp || Date.now(),
+                            qualityScore: calculateFVGQuality({ size: gapSize, timestamp: candle2.timestamp || Date.now() }, candle2, atr),
+                            fillStatus: 'unfilled',
+                            testCount: 0,
+                            valid: true
+                        };
+                        bullishFVGs.push(fvg);
+                    }
+                }
+            }
+        }
+        
+        if (candle1.low > candle3.high) {
+            const gapSize = candle1.low - candle3.high;
+            
+            if (gapSize >= minGapSize) {
+                const middleBody = Math.abs(candle2.close - candle2.open);
+                const avgRange = atr;
+                
+                if (middleBody >= avgRange * 1.5) {
+                    const isMiddleBearish = candle2.close < candle2.open;
+                    
+                    if (isMiddleBearish) {
+                        const fvg = {
+                            id: `bear_fvg_${Date.now()}_${i}`,
+                            type: 'bearish',
+                            top: candle1.low,
+                            bottom: candle3.high,
+                            size: gapSize,
+                            middleCandleIndex: i,
+                            timestamp: candle2.timestamp || Date.now(),
+                            qualityScore: calculateFVGQuality({ size: gapSize, timestamp: candle2.timestamp || Date.now() }, candle2, atr),
+                            fillStatus: 'unfilled',
+                            testCount: 0,
+                            valid: true
+                        };
+                        bearishFVGs.push(fvg);
+                    }
+                }
+            }
+        }
+    }
+    
+    return {
+        bullishFVGs: bullishFVGs,
+        bearishFVGs: bearishFVGs,
+        totalDetected: bullishFVGs.length + bearishFVGs.length
+    };
+}
+
+function calculateFVGQuality(fvg, middleCandle, atr) {
+    let score = 0;
+    
+    const gapRatio = fvg.size / atr;
+    if (gapRatio > 2.0) {
+        score += 40;
+    } else if (gapRatio > 1.5) {
+        score += 30;
+    } else if (gapRatio > 1.0) {
+        score += 20;
+    } else {
+        score += 10;
+    }
+    
+    const middleBody = Math.abs(middleCandle.close - middleCandle.open);
+    const momentumRatio = middleBody / atr;
+    
+    if (momentumRatio > 2.5) {
+        score += 40;
+    } else if (momentumRatio > 2.0) {
+        score += 30;
+    } else if (momentumRatio > 1.5) {
+        score += 20;
+    } else {
+        score += 10;
+    }
+    
+    const hour = new Date(fvg.timestamp).getUTCHours();
+    if ((hour >= 13 && hour <= 16) || (hour >= 0 && hour <= 2) || (hour >= 8 && hour <= 10)) {
+        score += 20;
+    } else {
+        score += 5;
+    }
+    
+    return Math.min(score, 100);
+}
+
+function analyzeMarketStructure(candles, currentTimeframe = '5m') {
+    if (!candles || candles.length < 20) {
+        return {
+            trend: 'neutral',
+            strength: 0,
+            recentSwingHigh: null,
+            recentSwingLow: null,
+            bosDetected: false,
+            chochDetected: false
+        };
+    }
+    
+    const lookbackMap = {
+        '1m': 10,
+        '5m': 5,
+        '15m': 3,
+        '1h': 3,
+        '4h': 2
+    };
+    const lookback = lookbackMap[currentTimeframe] || 5;
+    
+    const swingHighs = findSwingHighs(candles, lookback);
+    const swingLows = findSwingLows(candles, lookback);
+    
+    if (swingHighs.length < 2 || swingLows.length < 2) {
+        return {
+            trend: 'neutral',
+            strength: 0,
+            recentSwingHigh: swingHighs[swingHighs.length - 1] || null,
+            recentSwingLow: swingLows[swingLows.length - 1] || null,
+            bosDetected: false,
+            chochDetected: false
+        };
+    }
+    
+    const recentHighs = swingHighs.slice(-3);
+    const recentLows = swingLows.slice(-3);
+    
+    let higherHighs = 0;
+    let higherLows = 0;
+    let lowerHighs = 0;
+    let lowerLows = 0;
+    
+    for (let i = 1; i < recentHighs.length; i++) {
+        if (recentHighs[i].price > recentHighs[i - 1].price) {
+            higherHighs++;
+        } else {
+            lowerHighs++;
+        }
+    }
+    
+    for (let i = 1; i < recentLows.length; i++) {
+        if (recentLows[i].price > recentLows[i - 1].price) {
+            higherLows++;
+        } else {
+            lowerLows++;
+        }
+    }
+    
+    let trend = 'neutral';
+    let strength = 0;
+    
+    if (higherHighs >= 1 && higherLows >= 1) {
+        trend = 'bullish';
+        strength = ((higherHighs + higherLows) / (recentHighs.length + recentLows.length - 2)) * 100;
+    } else if (lowerHighs >= 1 && lowerLows >= 1) {
+        trend = 'bearish';
+        strength = ((lowerHighs + lowerLows) / (recentHighs.length + recentLows.length - 2)) * 100;
+    }
+    
+    const currentPrice = candles[candles.length - 1].close;
+    const mostRecentHigh = swingHighs[swingHighs.length - 1];
+    const mostRecentLow = swingLows[swingLows.length - 1];
+    
+    let bosDetected = false;
+    let bosType = null;
+    
+    if (mostRecentHigh && currentPrice > mostRecentHigh.price) {
+        bosDetected = true;
+        bosType = 'bullish_bos';
+    }
+    
+    if (mostRecentLow && currentPrice < mostRecentLow.price) {
+        bosDetected = true;
+        bosType = 'bearish_bos';
+    }
+    
+    let chochDetected = false;
+    
+    if (trend === 'bullish' && mostRecentLow && currentPrice < mostRecentLow.price) {
+        chochDetected = true;
+    } else if (trend === 'bearish' && mostRecentHigh && currentPrice > mostRecentHigh.price) {
+        chochDetected = true;
+    }
+    
+    return {
+        trend: trend,
+        strength: Math.round(strength),
+        recentSwingHigh: mostRecentHigh,
+        recentSwingLow: mostRecentLow,
+        bosDetected: bosDetected,
+        bosType: bosType,
+        chochDetected: chochDetected,
+        higherHighs: higherHighs,
+        higherLows: higherLows,
+        lowerHighs: lowerHighs,
+        lowerLows: lowerLows
+    };
+}
+
+function calculateConfluenceScore(setupData) {
+    let score = 0;
+    let maxScore = 18;
+    let factors = [];
+    
+    if (setupData.orderBlock) {
+        if (setupData.orderBlock.qualityScore >= 70) {
+            score += 3;
+            factors.push('High Quality OB');
+        } else if (setupData.orderBlock.qualityScore >= 50) {
+            score += 2;
+            factors.push('OB Present');
+        } else {
+            score += 1;
+            factors.push('Weak OB');
+        }
+    }
+    
+    if (setupData.fvg) {
+        if (setupData.fvg.qualityScore >= 60) {
+            score += 3;
+            factors.push('Quality FVG');
+        } else if (setupData.fvg.qualityScore >= 40) {
+            score += 2;
+            factors.push('FVG Present');
+        } else {
+            score += 1;
+            factors.push('Weak FVG');
+        }
+    }
+    
+    if (setupData.marketStructure) {
+        if (setupData.marketStructure.bosDetected) {
+            score += 1;
+            factors.push('BoS Detected');
+        }
+        if (setupData.marketStructure.chochDetected) {
+            score += 1;
+            factors.push('CHoCH Detected');
+        }
+    }
+
+    if (setupData.higherTimeframeBias && setupData.higherTimeframeBias.bias !== 'neutral') {
+        const biasDirection = setupData.higherTimeframeBias.bias;
+        const matchesBias = biasDirection === setupData.setupDirection;
+        
+        if (matchesBias) {
+            if (setupData.higherTimeframeBias.confidence === 'high') {
+                score += 3;
+                factors.push('HTF Trend Aligned');
+            } else {
+                score += 2;
+                factors.push('HTF Bias Support');
+            }
+        } else {
+            score -= 1;
+            factors.push('Counter HTF Bias');
+        }
+    }
+    
+    const hour = new Date().getUTCHours();
+    if ((hour >= 13 && hour <= 16) || (hour >= 0 && hour <= 2) || (hour >= 8 && hour <= 10)) {
+        score += 2;
+        factors.push('Prime Volatility Window');
+    } else if ((hour >= 11 && hour <= 13) || (hour >= 17 && hour <= 20)) {
+        score += 1;
+        factors.push('Active Period');
+    }
+    
+    if (setupData.mtfAlignment) {
+        if (setupData.mtfAlignment.aligned === 'perfect') {
+            score += 3;
+            factors.push('MTF Perfect Alignment');
+        } else if (setupData.mtfAlignment.aligned === 'partial') {
+            score += 2;
+            factors.push('MTF Partial');
+        } else if (setupData.mtfAlignment.aligned === 'htf_only') {
+            score += 1;
+            factors.push('HTF Aligned');
+        }
+    }
+    
+    if (setupData.riskReward) {
+        if (setupData.riskReward >= 4.0) {
+            score += 2;
+            factors.push('4:1+ R:R');
+        } else if (setupData.riskReward >= 3.0) {
+            score += 1;
+            factors.push('3:1 R:R');
+        }
+    }
+    
+    if (score < 0) {
+        score = 0;
+    }
+    
+    let quality = '';
+    let positionSizeMultiplier = 0;
+    let tradeable = false;
+    
+    if (score >= 12) {
+        quality = 'EXCEPTIONAL';
+        positionSizeMultiplier = 1.25;
+        tradeable = true;
+    } else if (score >= 10) {
+        quality = 'EXCELLENT';
+        positionSizeMultiplier = 1.0;
+        tradeable = true;
+    } else if (score >= 8) {
+        quality = 'VERY GOOD';
+        positionSizeMultiplier = 0.75;
+        tradeable = true;
+    } else if (score >= 6) {
+        quality = 'GOOD';
+        positionSizeMultiplier = 0.5;
+        tradeable = true;
+    } else if (score >= 4) {
+        quality = 'ACCEPTABLE';
+        positionSizeMultiplier = 0.25;
+        tradeable = true;
+    } else {
+        quality = 'INSUFFICIENT';
+        positionSizeMultiplier = 0;
+        tradeable = false;
+    }
+    
+    return {
+        totalScore: score,
+        maxScore: maxScore,
+        percentage: Math.round((score / maxScore) * 100),
+        qualityRating: quality,
+        factorsPresent: factors,
+        positionSizeMultiplier: positionSizeMultiplier,
+        tradeable: tradeable,
+        timestamp: Date.now()
+    };
+}
+
+function getRecentCandles(asset, count, timeframe = '1m') {
+    const historyByAsset = candleHistory[asset];
+    if (!historyByAsset || !historyByAsset[timeframe] || historyByAsset[timeframe].length === 0) {
+        return null;
+    }
+    
+    const source = historyByAsset[timeframe];
+    if (source.length >= count) {
+        return source.slice(-count);
+    }
+    return source.slice();
+}
+
+function getBestOrderBlock(obResult, currentPrice) {
+    if (!obResult || (!obResult.bullishOBs.length && !obResult.bearishOBs.length)) {
+        return null;
+    }
+    
+    let allOBs = [...obResult.bullishOBs, ...obResult.bearishOBs];
+    
+    allOBs.sort((a, b) => {
+        const aDistance = Math.abs(currentPrice - ((a.high + a.low) / 2));
+        const bDistance = Math.abs(currentPrice - ((b.high + b.low) / 2));
+        const aScore = a.qualityScore - (aDistance / currentPrice) * 100;
+        const bScore = b.qualityScore - (bDistance / currentPrice) * 100;
+        return bScore - aScore;
+    });
+    
+    return allOBs[0] || null;
+}
+
+function getBestFairValueGap(fvgResult, currentPrice) {
+    if (!fvgResult || (!fvgResult.bullishFVGs.length && !fvgResult.bearishFVGs.length)) {
+        return null;
+    }
+    
+    let allFVGs = [...fvgResult.bullishFVGs, ...fvgResult.bearishFVGs];
+    
+    allFVGs.sort((a, b) => {
+        const aDistance = Math.abs(currentPrice - ((a.top + a.bottom) / 2));
+        const bDistance = Math.abs(currentPrice - ((b.top + b.bottom) / 2));
+        const aScore = a.qualityScore - (aDistance / currentPrice) * 100;
+        const bScore = b.qualityScore - (bDistance / currentPrice) * 100;
+        return bScore - aScore;
+    });
+    
+    return allFVGs[0] || null;
+}
+
+// ============================================
+// HYBRID OB ENTRY SYSTEM
+// ============================================
+
+/**
+ * Calculate distance from current price to OB zone (percentage-based)
+ * @param {number} currentPrice - Current market price
+ * @param {object} obData - Order block object with high/low properties
+ * @returns {object} Distance info with percentage and dollar values
+ */
+function calculateOBDistance(currentPrice, obData) {
+    if (!obData || !obData.high || !obData.low) {
+        return { 
+            distanceDollar: null, 
+            distancePercent: null, 
+            isValid: false 
+        };
+    }
+    
+    try {
+        const obLow = parseFloat(obData.low);
+        const obHigh = parseFloat(obData.high);
+        
+        if (isNaN(obLow) || isNaN(obHigh)) {
+            return { distanceDollar: null, distancePercent: null, isValid: false };
+        }
+        
+        // Calculate distance to nearest OB boundary
+        let distanceDollar;
+        let location;
+        
+        if (currentPrice >= obLow && currentPrice <= obHigh) {
+            // Price is INSIDE the OB zone
+            distanceDollar = 0;
+            location = 'INSIDE';
+        } else if (currentPrice < obLow) {
+            // Price is BELOW the OB
+            distanceDollar = obLow - currentPrice;
+            location = 'BELOW';
+        } else {
+            // Price is ABOVE the OB
+            distanceDollar = currentPrice - obHigh;
+            location = 'ABOVE';
+        }
+        
+        // Calculate percentage distance
+        const distancePercent = (Math.abs(distanceDollar) / currentPrice) * 100;
+        
+        return {
+            distanceDollar: Math.abs(distanceDollar),
+            distancePercent: distancePercent,
+            location: location,
+            obLow: obLow,
+            obHigh: obHigh,
+            isValid: true
+        };
+        
+    } catch (error) {
+        logger.error('[OB] Error calculating distance:', error);
+        return { distanceDollar: null, distancePercent: null, isValid: false };
+    }
+}
+
+/**
+ * Determine if trade should be taken based on OB proximity (HYBRID MODE)
+ * @param {object} obData - Order block data from detection
+ * @param {number} currentPrice - Current market price
+ * @param {string} asset - Asset name ('btc' or 'eth')
+ * @returns {object} Entry decision with reason
+ */
+function evaluateOBEntry(obData, currentPrice, asset) {
+    const assetUpper = asset.toUpperCase();
+    
+    // CASE 1: No OB detected - standard confluence entry
+    if (!obData || !obData.high || !obData.low) {
+        if (OB_CONFIG.VERBOSE_LOGGING) {
+            logger.info(`[${assetUpper}] No OB detected - using standard confluence entry`);
+        }
+        return {
+            shouldEnter: true,
+            entryType: 'MOMENTUM',
+            reason: 'No OB - standard entry',
+            waitForPullback: false
+        };
+    }
+    
+    // CASE 2: OB detected - calculate distance
+    const distance = calculateOBDistance(currentPrice, obData);
+    
+    if (!distance.isValid) {
+        logger.warn(`[${assetUpper}] Invalid OB data - fallback to momentum`);
+        return {
+            shouldEnter: true,
+            entryType: 'MOMENTUM',
+            reason: 'Invalid OB data - fallback to momentum',
+            waitForPullback: false
+        };
+    }
+    
+    // Calculate thresholds based on current price
+    const closeThreshold = currentPrice * (OB_CONFIG.CLOSE_TOLERANCE_PCT / 100);
+    const farThreshold = currentPrice * (OB_CONFIG.FAR_TOLERANCE_PCT / 100);
+    
+    // Log distance info
+    if (OB_CONFIG.VERBOSE_LOGGING) {
+        logger.info(`[${assetUpper}] OB Distance Analysis:`, {
+            currentPrice: currentPrice.toFixed(2),
+            obRange: `${obData.low.toFixed(2)}-${obData.high.toFixed(2)}`,
+            location: distance.location,
+            distanceDollar: distance.distanceDollar.toFixed(2),
+            distancePercent: distance.distancePercent.toFixed(4) + '%',
+            closeThreshold: closeThreshold.toFixed(2) + ` (${OB_CONFIG.CLOSE_TOLERANCE_PCT}%)`,
+            farThreshold: farThreshold.toFixed(2) + ` (${OB_CONFIG.FAR_TOLERANCE_PCT}%)`
+        });
+    }
+    
+    // CASE 3: Price INSIDE or VERY CLOSE to OB (within 0.10%)
+    if (distance.distanceDollar <= closeThreshold) {
+        logger.info(`[${assetUpper}] ✅ Price within OB zone - HIGH QUALITY ENTRY`);
+        return {
+            shouldEnter: true,
+            entryType: 'OB_ENTRY',
+            reason: `Price ${distance.location} OB zone (${distance.distancePercent.toFixed(3)}% away)`,
+            waitForPullback: false,
+            quality: 'HIGH'
+        };
+    }
+    
+    // CASE 4: Price NEAR OB (0.10% - 0.30%) - Wait for pullback
+    if (distance.distanceDollar > closeThreshold && distance.distanceDollar <= farThreshold) {
+        logger.info(`[${assetUpper}] ⏸️  Price near OB but not at zone - WAITING for pullback`);
+        return {
+            shouldEnter: false,
+            entryType: 'WAITING_PULLBACK',
+            reason: `Price ${distance.distancePercent.toFixed(3)}% from OB - waiting for retest`,
+            waitForPullback: true,
+            quality: 'PENDING'
+        };
+    }
+    
+    // CASE 5: Price FAR from OB (> 0.30%) - Momentum entry (ignore OB)
+    logger.info(`[${assetUpper}] 🚀 Price far from OB - MOMENTUM ENTRY (ignoring OB)`);
+    return {
+        shouldEnter: true,
+        entryType: 'MOMENTUM',
+        reason: `Price ${distance.distancePercent.toFixed(3)}% from OB - too far, momentum trade`,
+        waitForPullback: false,
+        quality: 'MODERATE'
+    };
+}
+
+// ============================================
+// TRADING LOGIC
+// ============================================
+function calculateSetupLevels(asset, price, direction, config) {
+    const entry = {
+        min: price * (direction === 'BULLISH' ? 0.9995 : 1.0005),
+        max: price * (direction === 'BULLISH' ? 1.0005 : 0.9995)
+    };
+    let stop, t1, t2;
+    if (direction === 'BULLISH') {
+        stop = price * (1 - config.stopPct);
+        t1 = price * (1 + (config.stopPct * config.target1));
+        t2 = price * (1 + (config.stopPct * config.target2));
+    } else {
+        stop = price * (1 + config.stopPct);
+        t1 = price * (1 - (config.stopPct * config.target1));
+        t2 = price * (1 - (config.stopPct * config.target2));
+    }
+    return { entry, stop, t1, t2 };
+}
+
+function getPatternProbability(setup) {
+    const patternKey = `${setup.direction}_${setup.confidence}_${marketCondition}_${volatilityLevel}`;
+    const pattern = tradeDatabase.patterns[patternKey];
+    if (!pattern || (pattern.wins + pattern.losses + pattern.breakevenTrades) < 3) return 50;
+    const total = pattern.wins + pattern.losses + pattern.breakevenTrades;
+    return Math.round((pattern.wins / total) * 100);
+}
+
+async function scanForSignals(asset, currentPrice) {
+    const timeSinceLastSignal = Date.now() - lastSignalTime[asset];
+    if (timeSinceLastSignal < 60000) return;
+    
+    // Diagnostic logging for candle availability
+    const candles1m = getRecentCandles(asset, 50, '1m');
+    const candles5m = getRecentCandles(asset, 60, '5m');
+    const candles15m = getRecentCandles(asset, 50, '15m');
+    
+    // Log candle counts periodically (every 10 scans = ~30 seconds)
+    if (Math.random() < 0.1) {
+        logger.info(`[${asset.toUpperCase()}] Candle availability check`, {
+            '1m': candles1m ? candles1m.length : 0,
+            '5m': candles5m ? candles5m.length : 0,
+            '15m': candles15m ? candles15m.length : 0
+        });
+    }
+    
+    const recent1mCandles = candles1m;
+    
+    let smcData = null;
+    if (recent1mCandles && recent1mCandles.length >= 20) {
+        try {
+            const obResult = detectOrderBlocks(recent1mCandles, asset, '5m');
+            const bestOB = getBestOrderBlock(obResult, currentPrice);
+            
+            // ========== HYBRID OB ENTRY EVALUATION ==========
+            const obDecision = evaluateOBEntry(bestOB, currentPrice, asset);
+            
+            // If we should NOT enter (waiting for pullback), skip this cycle
+            if (!obDecision.shouldEnter) {
+                logger.info(`[${asset.toUpperCase()}] ${obDecision.reason} - skipping trade`);
+                return; // Skip to next asset
+            }
+            
+            // Log entry type
+            logger.info(`[${asset.toUpperCase()}] Entry Type: ${obDecision.entryType} | ${obDecision.reason}`);
+            
+            // Call FVG detection
+            const fvgDetection = detectFVGOnHigherTimeframe(asset);
+            
+            // Only log if there's an issue or FVG detected (to reduce log spam)
+            if (!fvgDetection) {
+                logger.warn(`[${asset.toUpperCase()}] FVG detection returned null/undefined`);
+            } else if (fvgDetection.totalDetected > 0) {
+                logger.info(`[${asset.toUpperCase()}] FVG detected on 5m`, {
+                    totalDetected: fvgDetection.totalDetected,
+                    bullish: fvgDetection.bullishFVGs?.length || 0,
+                    bearish: fvgDetection.bearishFVGs?.length || 0,
+                    bestQuality: fvgDetection.bestFVG?.qualityScore || 'N/A'
+                });
+            }
+            
+            const bestFVG = fvgDetection ? (fvgDetection.bestFVG || getBestFairValueGap(fvgDetection, currentPrice)) : null;
+            
+            const higherTimeframeBias = getHigherTimeframeBias(asset);
+            const marketStructure = analyzeMarketStructure(recent1mCandles, '5m');
+            const session = detectSessionBias(Date.now());
+            const volatility = detectVolatilityLevel(priceHistory[asset], 20);
+            const trend = detectTrendCondition(priceHistory[asset], 50);
+            
+            const setupData = {
+                orderBlock: bestOB,
+                fvg: bestFVG,
+                marketStructure: marketStructure,
+                setupDirection: calculateMomentum(asset) > 0 ? 'bullish' : 'bearish',
+                mtfAlignment: { aligned: 'htf_only' },
+                riskReward: 3.0,
+                higherTimeframeBias: higherTimeframeBias,
+                obEntryType: obDecision.entryType,  // NEW: Track entry type
+                obEntryQuality: obDecision.quality   // NEW: Track entry quality
+            };
+            
+            const confluenceResult = calculateConfluenceScore(setupData);
+            
+            smcData = {
+                session: session,
+                volatility: volatility,
+                trend: trend,
+                marketStructure: marketStructure,
+                orderBlock: bestOB,
+                fvg: bestFVG,
+                confluence: confluenceResult,
+                fvgDetection,
+                higherTimeframeBias: higherTimeframeBias,
+                obEntryType: obDecision.entryType,  // NEW: Track entry type
+                obEntryQuality: obDecision.quality   // NEW: Track entry quality
+            };
+        } catch (error) {
+            logger.error('SMC Detection Error', { error: error.message });
+        }
+    }
+    
+    if (smcData && smcData.confluence && !activeTrades[asset]) {
+        if (smcData.confluence.tradeable === true) {
+            const signalConfidence = smcData.confluence.totalScore;
+            
+            logger.info(`🚀 SMC Signal Generated`, {
+                asset: asset.toUpperCase(),
+                confluenceScore: signalConfidence,
+                qualityRating: smcData.confluence.qualityRating,
+                obEntryType: smcData.obEntryType || 'MOMENTUM',
+                obEntryQuality: smcData.obEntryQuality || 'MODERATE'
+            });
+            
+            await generateAISetup(
+                asset,
+                currentPrice,
+                signalConfidence,
+                calculateMomentum(asset),
+                smcData
+            );
+            
+            lastSignalTime[asset] = Date.now();
+        }
+    }
+}
+
+// Processing lock to prevent concurrent trade execution
+let isProcessingTrade = false;
+let lastTradeExecutionTime = 0;
+const MIN_TRADE_INTERVAL = 5000; // 5 seconds between trades
+
+async function generateAISetup(asset, price, confidence, momentum, smcData = null) {
+    try {
+        // SAFE EQUITY CHECK - Handles object vs number
+        let currentEquityVal = 0;
+        if (typeof accountState.currentEquity === 'object') {
+            currentEquityVal = parseFloat(accountState.currentEquity.totalMarginBalance || 0);
+        } else {
+            currentEquityVal = parseFloat(accountState.currentEquity || 0);
+        }
+        
+        // Use the safe value
+        const equity = currentEquityVal.toFixed(2);
+        
+        // Log setup generation
+        console.log(`[AI SETUP] Generating setup for ${asset} | Equity: $${equity}`);
+
+        // Use the price parameter that's already passed (real current price)
+        const currentPrice = parseFloat(price) || 0;
+        if (!currentPrice || currentPrice <= 0) {
+            console.warn(`[AI SETUP] Invalid price for ${asset}: ${price}, skipping.`);
+            return null;
+        }
+
+        // Basic Risk Calculation (1% risk)
+        const riskAmount = currentEquityVal * 0.01;
+        const stopLossPercent = 0.01; // 1% stop loss distance
+        
+        let entryPrice = currentPrice;
+        let stopLoss = 0;
+        let takeProfit1 = 0;
+        let takeProfit2 = 0;
+
+        const signalType = momentum > 0 ? 'BULLISH' : 'BEARISH';
+        if (signalType === 'BULLISH') {
+            stopLoss = entryPrice * (1 - stopLossPercent);
+            takeProfit1 = entryPrice * (1 + (stopLossPercent * 1.5));
+            takeProfit2 = entryPrice * (1 + (stopLossPercent * 3));
+        } else {
+            stopLoss = entryPrice * (1 + stopLossPercent);
+            takeProfit1 = entryPrice * (1 - (stopLossPercent * 1.5));
+            takeProfit2 = entryPrice * (1 - (stopLossPercent * 3));
+        }
+
+        // Calculate Position Size
+        const priceDistance = Math.abs(entryPrice - stopLoss);
+        const positionSize = (riskAmount / priceDistance).toFixed(4);
+
+        const entryPriceNum = parseFloat(entryPrice);
+        const setup = {
+            symbol: asset === 'btc' ? 'BTCUSDT' : 'ETHUSDT',
+            side: signalType === 'BULLISH' ? 'BUY' : 'SELL',
+            entryPrice: entryPrice.toFixed(2),
+            entry: {
+                min: entryPriceNum * 0.9995,  // Small range around entry
+                max: entryPriceNum * 1.0005
+            },
+            stop: parseFloat(stopLoss.toFixed(2)),
+            t1: parseFloat(takeProfit1.toFixed(2)),
+            t2: parseFloat(takeProfit2.toFixed(2)),
+            stopLoss: stopLoss.toFixed(2),
+            takeProfit1: takeProfit1.toFixed(2),
+            takeProfit2: takeProfit2.toFixed(2),
+            quantity: positionSize,
+            risk: riskAmount.toFixed(2),
+            confluenceScore: smcData ? (smcData.confluence?.totalScore || confidence) : confidence,
+            direction: signalType,
+            status: 'ACTIVE',
+            timestamp: Date.now(),
+            asset: asset,
+            reachedTarget1: false,
+            reachedTarget2: false
+        };
+
+        // Execute the trade using placeMarketOrder
+        const symbol = setup.symbol;
+        const entrySide = setup.side;
+        const quantity = parseFloat(setup.quantity);
+        
+        logger.info(`[AI SETUP] Executing trade: ${entrySide} ${quantity} ${symbol} @ $${entryPrice.toFixed(2)}`);
+        
+        const entryOrder = await placeMarketOrder(symbol, entrySide, quantity);
+        
+        if (entryOrder && entryOrder.orderId) {
+            setup.entryOrderId = entryOrder.orderId;
+            const actualEntryPrice = parseFloat(entryOrder.avgPrice || entryPrice);
+            setup.entryPrice = actualEntryPrice;
+            // Update entry range with actual executed price
+            setup.entry = {
+                min: actualEntryPrice * 0.9995,
+                max: actualEntryPrice * 1.0005
+            };
+            logger.success(`[AI SETUP] ✅ Trade executed: Order ID ${entryOrder.orderId}`);
+            
+            // Save to active trades
+            activeTrades[asset] = setup;
+            tradeDatabase.activeTrades[asset] = setup;
+            await saveTradeData();
+            
+            return setup;
+        } else {
+            logger.error(`[AI SETUP] ❌ Trade execution failed`);
+            return null;
+        }
+
+    } catch (error) {
+        console.error('[AI SETUP ERROR]', error.message);
+        return null;
+    }
+}
+
+function recordTradeOutcome(asset, setup, outcome, profit) {
+    // ✅ FIX #1: Only record completed trades
+    if (!outcome || outcome === 'ACTIVE' || outcome === 'OPEN' || outcome === null || outcome === undefined) {
+        logger.warn(`Not recording - trade is still ${outcome || 'ACTIVE'}`, { asset });
+        return;
+    }
+    
+    // ✅ FIX #2: Prevent duplicates
+    if (setup.recorded === true) {
+        logger.warn('Already recorded - skipping duplicate', { asset });
+        return;
+    }
+    
+    // ✅ FIX #3: Check if trade already exists
+    const tradeExists = tradeDatabase.trades.some(existingTrade => 
+        existingTrade.asset === asset && 
+        Math.abs((existingTrade.setup?.entryPrice || existingTrade.entryPrice || 0) - (setup.entryPrice || 0)) < 0.5 &&
+        existingTrade.outcome &&
+        existingTrade.outcome === outcome
+    );
+    
+    if (tradeExists) {
+        logger.warn('Duplicate trade detected - skipping', { asset });
+        return;
+    }
+    
+    // ✅ FIX #4: Mark as recorded immediately
+    setup.recorded = true;
+    
+    logger.info(`✅ Recording trade`, {
+        asset: asset.toUpperCase(),
+        outcome,
+        profit: profit ? profit.toFixed(2) : 'N/A'
+    });
+    
+    // Use position size from setup if available (from real trade), otherwise calculate
+    let positionSize = setup.positionSize || 0;
+    if (!positionSize) {
+        // Fallback calculation if positionSize not stored
+        const stopDistance = Math.abs(setup.entryPrice - setup.stop);
+        if (stopDistance > 0 && setup.riskAmount) {
+            positionSize = setup.riskAmount / stopDistance;
+        }
+        const minPosition = asset === 'btc' ? CONFIG.MIN_BTC_POSITION : CONFIG.MIN_ETH_POSITION;
+        positionSize = Math.max(positionSize, minPosition);
+    }
+    
+    // Use real P&L from Binance (passed as profit parameter)
+    // If profit is not provided, calculate from position size and price movement
+    let realizedPnL = profit;
+    if (realizedPnL === undefined || realizedPnL === null) {
+        // Fallback: calculate P&L from position size and price difference
+        if (outcome === 'WIN' && setup.t2 && setup.entryPrice) {
+            const priceDiff = Math.abs(setup.t2 - setup.entryPrice);
+            realizedPnL = positionSize * priceDiff;
+        } else if (outcome === 'LOSS' && setup.stop && setup.entryPrice) {
+            const priceDiff = Math.abs(setup.stop - setup.entryPrice);
+            realizedPnL = -positionSize * priceDiff;
+        } else if (outcome === 'BREAKEVEN') {
+            realizedPnL = 0;
+        } else {
+            realizedPnL = 0;
+            logger.warn('[TRADE] Could not calculate P&L - using 0', { asset, outcome });
+        }
+    }
+    
+    if (isNaN(realizedPnL) || !isFinite(realizedPnL)) {
+        logger.error('Invalid P&L calculated', { asset, outcome, realizedPnL });
+        realizedPnL = 0;
+    }
+    
+    // Remove position from openPositions tracking
+    accountState.openPositions = accountState.openPositions.filter(
+        pos => pos.asset !== asset || pos.entryOrderId !== setup.entryOrderId
+    );
+    
+    const trade = {
+        asset,
+        setup,
+        outcome,
+        profit: realizedPnL,
+        positionSize: positionSize,
+        timestamp: setup.timestamp || Date.now(),
+        reachedTarget1: setup.reachedTarget1 || false,
+        reachedTarget2: setup.reachedTarget2 || false,
+        sessionActive: setup.sessionActive || '',
+        higherTFBias: setup.higherTFBias || '',
+        higherTFStrength: setup.higherTFStrength || 0,
+        higherTFConfidence: setup.higherTFConfidence || '',
+        volatilityLevel: setup.volatilityLevel || volatilityLevel,
+        marketCondition: setup.marketCondition || marketCondition,
+        confluenceScore: setup.confluenceScore || 0,
+        confluenceRating: setup.confluenceRating || 'UNKNOWN',
+        obDetected: setup.smcData?.orderBlock ? true : false,
+        obLevel: setup.smcData?.orderBlock?.high || null,
+        obStrength: setup.smcData?.orderBlock?.qualityScore >= 70 ? 'STRONG' : 
+                   setup.smcData?.orderBlock?.qualityScore >= 50 ? 'MEDIUM' : 'WEAK',
+        fvgDetected: setup.smcData?.fvg ? true : false,
+        fvgTop: setup.smcData?.fvg?.top || null,
+        fvgBottom: setup.smcData?.fvg?.bottom || null,
+        fvgQuality: setup.smcData?.fvg?.qualityScore >= 60 ? 'HIGH' : 
+                   setup.smcData?.fvg?.qualityScore >= 40 ? 'MEDIUM' : 'LOW',
+        confluenceFactors: setup.smcData?.confluence?.factorsPresent || [],
+        confluenceCount: setup.smcData?.confluence?.factorsPresent?.length || 0,
+        signalQuality: setup.confluenceRating || 'UNKNOWN',
+        obEntryType: setup.obEntryType || 'MOMENTUM',  // NEW: OB Entry Type
+        obEntryQuality: setup.obEntryQuality || 'MODERATE',  // NEW: OB Entry Quality
+        obDistancePercent: setup.smcData?.orderBlock ? 
+            (calculateOBDistance(setup.entryPrice, setup.smcData.orderBlock)?.distancePercent?.toFixed(4) || 'N/A') : 'N/A'  // NEW: OB Distance %
+    };
+    
+    tradeDatabase.trades.push(trade);
+    tradeDatabase.performance.totalTrades = tradeDatabase.trades.length;
+    
+    if (outcome === 'WIN') {
+        tradeDatabase.performance.winners++;
+        const totalWins = tradeDatabase.trades.filter(t => t.outcome === 'WIN').reduce((sum, t) => sum + Math.abs(t.profit), 0);
+        tradeDatabase.performance.avgWin = totalWins / tradeDatabase.performance.winners;
+    } else if (outcome === 'LOSS') {
+        tradeDatabase.performance.losers++;
+        const totalLosses = tradeDatabase.trades.filter(t => t.outcome === 'LOSS').reduce((sum, t) => sum + Math.abs(t.profit), 0);
+        tradeDatabase.performance.avgLoss = totalLosses / tradeDatabase.performance.losers;
+    } else if (outcome === 'BREAKEVEN') {
+        tradeDatabase.performance.breakevenTrades++;
+    }
+    
+    tradeDatabase.performance.winRate = tradeDatabase.performance.totalTrades > 0 ?
+        (tradeDatabase.performance.winners / tradeDatabase.performance.totalTrades) * 100 : 0;
+    
+    tradeDatabase.performance.breakevenRate = tradeDatabase.performance.totalTrades > 0 ?
+        (tradeDatabase.performance.breakevenTrades / tradeDatabase.performance.totalTrades) * 100 : 0;
+    
+    const totalWinsAmount = tradeDatabase.trades.filter(t => t.outcome === 'WIN').reduce((sum, t) => sum + Math.abs(t.profit), 0);
+    const totalLossesAmount = tradeDatabase.trades.filter(t => t.outcome === 'LOSS').reduce((sum, t) => sum + Math.abs(t.profit), 0);
+    tradeDatabase.performance.profitFactor = totalLossesAmount > 0 ? totalWinsAmount / totalLossesAmount : (totalWinsAmount > 0 ? Infinity : 0);
+    
+    tradeDatabase.performance.totalProfit = totalWinsAmount - totalLossesAmount;
+    
+    updatePatternWeights(setup, outcome);
+    
+    logger.success(`✅ Trade recorded: ${asset.toUpperCase()} ${outcome}`, {
+        profit: realizedPnL.toFixed(2),
+        totalTrades: tradeDatabase.trades.length
+    });
+    
+    saveTradeData();
+}
+
+function updatePatternWeights(setup, outcome) {
+    const patternKey = `${setup.direction}_${setup.confidence}_${marketCondition}_${volatilityLevel}`;
+    if (!tradeDatabase.patterns[patternKey]) {
+        tradeDatabase.patterns[patternKey] = { wins: 0, losses: 0, breakevenTrades: 0, weight: 1.0 };
+    }
+    const pattern = tradeDatabase.patterns[patternKey];
+    if (outcome === 'WIN') {
+        pattern.wins++;
+        pattern.weight = Math.min(pattern.weight + 0.15, 2.0);
+    } else if (outcome === 'BREAKEVEN') {
+        pattern.breakevenTrades++;
+        pattern.weight = Math.min(pattern.weight + 0.05, 1.5);
+    } else if (outcome === 'LOSS') {
+        pattern.losses++;
+        pattern.weight = Math.max(pattern.weight - 0.2, 0.2);
+    }
+}
+
+async function updateTradeStatus(asset) {
+    const trade = activeTrades[asset];
+    if (!trade) return;
+    const currentPrice = currentPrices[asset];
+    if (!currentPrice || currentPrice <= 0) return;
+    
+    // Handle both old format (entry.min/max) and new format (entryPrice)
+    let entryAvg;
+    if (trade.entry && trade.entry.min && trade.entry.max) {
+        entryAvg = (trade.entry.min + trade.entry.max) / 2;
+    } else if (trade.entryPrice) {
+        entryAvg = parseFloat(trade.entryPrice);
+    } else {
+        logger.warn(`[TRADE STATUS] Invalid trade structure for ${asset}, skipping update`);
+        return;
+    }
+    
+    if (!trade.reachedTarget1 &&
+        ((trade.direction === 'BULLISH' && currentPrice >= trade.t1) ||
+         (trade.direction === 'BEARISH' && currentPrice <= trade.t1))) {
+        trade.reachedTarget1 = true;
+        trade.originalStop = trade.stop;
+        trade.stop = entryAvg;
+        logger.info(`🎯 TARGET 1 HIT`, { asset: asset.toUpperCase(), newStop: entryAvg.toFixed(2) });
+    }
+    else if (trade.reachedTarget1 && !trade.reachedTarget2 &&
+            ((trade.direction === 'BULLISH' && currentPrice >= trade.t2) ||
+             (trade.direction === 'BEARISH' && currentPrice <= trade.t2))) {
+        const profit = Math.abs(trade.t2 - entryAvg);
+        trade.status = 'TARGET2_HIT';
+        trade.outcome = 'WIN';
+        trade.profit = profit;
+        recordTradeOutcome(asset, trade, 'WIN', profit);
+        activeTrades[asset] = null;
+        tradeDatabase.activeTrades[asset] = null;
+        await saveTradeData();
+        logger.success(`🚀 TARGET 2 HIT - FULL WIN!`, { asset: asset.toUpperCase(), profit: profit.toFixed(2) });
+    }
+    else if (trade.reachedTarget1 && !trade.reachedTarget2 &&
+            ((trade.direction === 'BULLISH' && currentPrice <= trade.stop) ||
+             (trade.direction === 'BEARISH' && currentPrice >= trade.stop))) {
+        trade.status = 'BREAKEVEN';
+        trade.outcome = 'BREAKEVEN';
+        trade.profit = 0;
+        recordTradeOutcome(asset, trade, 'BREAKEVEN', 0);
+        activeTrades[asset] = null;
+        tradeDatabase.activeTrades[asset] = null;
+        await saveTradeData();
+        logger.info(`🔄 BREAKEVEN`, { asset: asset.toUpperCase() });
+    }
+    else if (!trade.reachedTarget1 &&
+            ((trade.direction === 'BULLISH' && currentPrice <= (trade.originalStop || trade.stop)) ||
+             (trade.direction === 'BEARISH' && currentPrice >= (trade.originalStop || trade.stop)))) {
+        const loss = Math.abs(currentPrice - entryAvg);
+        trade.status = 'STOPPED';
+        trade.outcome = 'LOSS';
+        trade.profit = -loss;
+        recordTradeOutcome(asset, trade, 'LOSS', loss);
+        activeTrades[asset] = null;
+        tradeDatabase.activeTrades[asset] = null;
+        await saveTradeData();
+        logger.warn(`❌ STOP LOSS HIT`, { asset: asset.toUpperCase(), loss: loss.toFixed(2) });
+    }
+}
+
+function adaptiveScan() {
+    detectMarketCondition();
+    detectVolatility();
+    
+    ['btc', 'eth'].forEach(async (asset) => {
+        if (currentPrices[asset] > 0) {
+            // Always check exits first
+            await updateTradeStatus(asset);
+            
+            // Then check for new signals
+            if (!activeTrades[asset]) {
+                await scanForSignals(asset, currentPrices[asset]);
+            }
+        }
+    });
+}
+
+// ============================================
+// API SERVER
+// ============================================
+const app = express();
+
+// Enable CORS for browser access
+app.use(corsMiddleware);
+app.use(express.json());
+
+app.get('/api/data', async (req, res) => {
+    try {
+        const data = {
+            ...tradeDatabase,
+            activeTrades: activeTrades,
+            currentPrices: currentPrices,
+            timestamp: Date.now()
+        };
+        res.json(data);
+    } catch (err) {
+        logger.error('GET /api/data failed', { error: err.message });
+        res.status(500).json({ error: 'Failed to load trade data' });
+    }
+});
+
+app.post('/api/data', async (req, res) => {
+    try {
+        const data = req.body;
+        if (!data || typeof data !== 'object') {
+            return res.status(400).json({ error: 'Invalid data structure' });
+        }
+        
+        Object.assign(tradeDatabase, data);
+        if (data.activeTrades) activeTrades = data.activeTrades;
+        
+        await saveTradeData();
+        res.json({ success: true, message: 'Data saved successfully' });
+    } catch (err) {
+        logger.error('POST /api/data failed', { error: err.message });
+        res.status(500).json({ error: 'Failed to save trade data' });
+    }
+});
+
+app.get('/api/health', (req, res) => {
+    const activeTradeCount = Object.values(activeTrades).filter(t => t !== null && t !== undefined).length;
+    res.json({
+        status: 'online',
+        activeTrades: activeTradeCount,
+        trades: tradeDatabase.trades.length,
+        performance: tradeDatabase.performance,
+        uptime: process.uptime(),
+        timestamp: Date.now()
+    });
+});
+
+app.get('/api/patterns', (req, res) => {
+    try {
+        const patterns = {};
+        let totalPatterns = 0;
+        let patternsWithData = 0;
+        
+        // Process and format patterns
+        for (const [key, pattern] of Object.entries(tradeDatabase.patterns)) {
+            totalPatterns++;
+            const totalTrades = pattern.wins + pattern.losses + pattern.breakevenTrades;
+            
+            if (totalTrades >= 3) {
+                patternsWithData++;
+                const winRate = totalTrades > 0 ? (pattern.wins / totalTrades) * 100 : 0;
+                
+                patterns[key] = {
+                    ...pattern,
+                    totalTrades,
+                    winRate: Math.round(winRate * 100) / 100,
+                    winLossRatio: pattern.losses > 0 ? (pattern.wins / pattern.losses).toFixed(2) : pattern.wins > 0 ? '∞' : '0',
+                    effectiveness: pattern.weight >= 1.5 ? 'HIGH' : pattern.weight >= 1.0 ? 'MEDIUM' : 'LOW'
+                };
+            }
+        }
+        
+        // Sort patterns by weight (most effective first)
+        const sortedPatterns = Object.entries(patterns)
+            .sort((a, b) => b[1].weight - a[1].weight)
+            .reduce((acc, [key, value]) => {
+                acc[key] = value;
+                return acc;
+            }, {});
+        
+        res.json({
+            totalPatterns,
+            patternsWithData: patternsWithData,
+            patternsNeedingData: totalPatterns - patternsWithData,
+            patterns: sortedPatterns,
+            learningActive: patternsWithData > 0,
+            topPatterns: Object.entries(sortedPatterns).slice(0, 10).map(([key, p]) => ({
+                pattern: key,
+                winRate: `${p.winRate}%`,
+                trades: p.totalTrades,
+                wins: p.wins,
+                losses: p.losses,
+                breakeven: p.breakevenTrades,
+                weight: p.weight.toFixed(2),
+                effectiveness: p.effectiveness
+            }))
+        });
+    } catch (err) {
+        logger.error('GET /api/patterns failed', { error: err.message });
+        res.status(500).json({ error: 'Failed to get patterns' });
+    }
+});
+
+app.get('/api/trades/csv', async (req, res) => {
+    try {
+        const rows = tradeDatabase.trades.filter(t => t.outcome).map(t => {
+            const s = t.setup || {};
+            const smcData = s.smcData || {};
+            const timestamp = t.timestamp || s.timestamp || Date.now();
+            const date = new Date(timestamp);
+            const formattedTimestamp = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+            
+            const escape = (val) => {
+                if (val === null || val === undefined) return '';
+                const str = String(val);
+                if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+                    return `"${str.replace(/"/g, '""')}"`;
+                }
+                return str;
+            };
+            
+            return [
+                formattedTimestamp,
+                t.asset || '',
+                s.direction || '',
+                s.entry?.min ?? '',
+                s.entry?.max ?? '',
+                s.stop ?? '',
+                s.t1 ?? '',
+                s.t2 ?? '',
+                s.entryPrice || '',
+                t.outcome || '',
+                t.profit !== undefined && t.profit !== null ? t.profit : '',
+                t.marketCondition || s.marketCondition || '',
+                t.volatilityLevel || s.volatilityLevel || '',
+                t.sessionActive || s.sessionActive || '',
+                s.higherTFBias || '',
+                s.confluenceScore || '',
+                smcData.orderBlock ? 'YES' : 'NO',
+                smcData.orderBlock ? `${smcData.orderBlock.low}-${smcData.orderBlock.high}` : '',
+                smcData.orderBlock ? (smcData.orderBlock.qualityScore >= 70 ? 'HIGH' : smcData.orderBlock.qualityScore >= 50 ? 'MEDIUM' : 'LOW') : '',
+                smcData.orderBlock ? smcData.orderBlock.qualityScore : '',
+                t.obEntryType || s.obEntryType || 'MOMENTUM',  // NEW: OB Entry Type
+                t.obEntryQuality || s.obEntryQuality || 'MODERATE',  // NEW: OB Entry Quality
+                t.obDistancePercent || 'N/A',  // NEW: OB Distance %
+                smcData.fvg ? 'YES' : 'NO',
+                smcData.fvg ? smcData.fvg.top : '',
+                smcData.fvg ? smcData.fvg.bottom : '',
+                smcData.fvg ? (smcData.fvg.qualityScore >= 60 ? 'HIGH' : smcData.fvg.qualityScore >= 40 ? 'MEDIUM' : 'LOW') : '',
+                smcData.marketStructure ? smcData.marketStructure.trend : '',
+                smcData.marketStructure ? smcData.marketStructure.bosDetected : false,
+                smcData.marketStructure ? smcData.marketStructure.chochDetected : false,
+                smcData.confluence ? smcData.confluence.qualityRating : '',
+                smcData.confluence ? smcData.confluence.factorsPresent?.join(';') : ''
+            ].map(escape).join(',');
+        });
+        
+        const header = 'Timestamp,Asset,Direction,Entry Min,Entry Max,Stop,T1,T2,Entry Price,Outcome,Profit,Market Condition,Volatility Level,Session Active,Higher TF Bias,Confluence Score,OB Detected,OB Level,OB Quality,OB Quality Score,OB Entry Type,OB Entry Quality,OB Distance %,FVG Detected,FVG Top,FVG Bottom,FVG Quality,Market Structure Trend,BoS Detected,CHoCH Detected,Confluence Rating,Confluence Factors';
+        const csv = [header, ...rows].join('\n');
+        
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', 'attachment; filename="nexus_trades.csv"');
+        res.send(csv);
+    } catch (err) {
+        logger.error('CSV export failed', { error: err.message });
+        res.status(500).json({ error: 'Failed to export CSV' });
+    }
+});
+
+// ============================================
+// MAIN EXECUTION
+// ============================================
+async function main() {
+    await ensureDataDir();
+    await loadTradeData();
+    
+    // ============================================================================
+    // FIX #4: Test API Keys Explicitly at Startup - CRITICAL DIAGNOSTIC
+    // ============================================================================
+    logger.info('\n' + '='.repeat(80));
+    logger.info('[INIT] ⚠️  RATE LIMIT PROTECTION ENABLED');
+    logger.info('[INIT] All API calls are rate-limited to prevent 429 errors');
+    logger.info('[INIT] If you just hit rate limits, wait 15 minutes before restarting');
+    logger.info('='.repeat(80) + '\n');
+    
+    logger.info('[INIT] Running comprehensive API connection diagnostic...');
+    logger.info('[INIT] This will test endpoint, permissions, and attempt a test order');
+    logger.info('[INIT] NOTE: Diagnostics run ONCE at startup only - not in main loop');
+    const apiTestResult = await testAPIKeys();
+    if (!apiTestResult) {
+        logger.error('\n' + '='.repeat(80));
+        logger.error('[INIT] ❌ FATAL: API CONNECTION TEST FAILED');
+        logger.error('[INIT] Cannot start Nexus - trading will not work');
+        logger.error('[INIT] Please fix the issues above and restart');
+        logger.error('='.repeat(80) + '\n');
+        process.exit(1); // Exit if API test fails
+    }
+    
+    logger.success('[INIT] ✅ API connection test PASSED - Nexus ready to trade');
+    
+    // ============================================================================
+    // FIX #2: Clear Phantom Trade Data
+    // ============================================================================
+    logger.info('[INIT] Cleaning up phantom/stale trades...');
+    await clearPhantomTrades();
+    
+    await backfillCandles();
+    
+    // Initialize account
+    logger.info('[INIT] Fetching initial account balance...');
+    try {
+        await updateAccountEquity();
+        logger.info(`[INIT] Account initialized - Starting Capital: $${Number(accountState.startingCapital || 0).toFixed(2)}`);
+        logger.info(`[INIT] Current Equity: $${Number(accountState.currentEquity || 0).toFixed(2)}`);
+    } catch (error) {
+        logger.warn('[INIT] Could not fetch account balance - using default values', { error: error.message });
+        // Continue with default values if API unavailable
+    }
+    
+    // Check position mode (Hedge vs One-Way)
+    logger.info('[INIT] Checking position mode...');
+    await checkPositionMode();
+    
+    // Verify API permissions
+    logger.info('[INIT] Verifying API permissions...');
+    await verifyAPIPermissions();
+    
+    // Pre-fetch symbol precision for BTC and ETH
+    logger.info('[INIT] Fetching symbol precision rules...');
+    await getSymbolPrecision('BTCUSDT');
+    await getSymbolPrecision('ETHUSDT');
+    
+    // Update account balance every 30 seconds
+    setInterval(updateAccountEquity, 30000);
+    logger.info('[INIT] Account monitoring started (30s interval)');
+    
+    // Start API server
+    app.listen(CONFIG.API_PORT, '0.0.0.0', () => {
+        logger.success(`✅ API Server started on port ${CONFIG.API_PORT}`);
+    });
+    
+    // Connect WebSocket
+    connectBinance();
+    
+    // Start trading loop
+    setInterval(() => {
+        adaptiveScan();
+    }, CONFIG.SCAN_INTERVAL_MS);
+    
+    // Initial scan
+    adaptiveScan();
+    
+    logger.success('✅ NEXUS Trading Engine started - Running 24/7');
+    
+    // Graceful shutdown
+    process.on('SIGTERM', async () => {
+        logger.info('SIGTERM received - shutting down gracefully');
+        if (ws) ws.close();
+        await saveTradeData();
+        process.exit(0);
+    });
+    
+    process.on('SIGINT', async () => {
+        logger.info('SIGINT received - shutting down gracefully');
+        if (ws) ws.close();
+        await saveTradeData();
+        process.exit(0);
+    });
+}
+
+// Run if executed directly
+if (require.main === module) {
+    main().catch(err => {
+        console.error('Fatal error:', err);
+        process.exit(1);
+    });
+}
+
+module.exports = { main };
+

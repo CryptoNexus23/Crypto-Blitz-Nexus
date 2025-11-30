@@ -1,0 +1,136 @@
+{
+  "trades": [
+    {
+      "asset": "eth",
+      "setup": {
+        "symbol": "ETHUSDT",
+        "side": "SELL",
+        "entryPrice": 3049.18,
+        "entry": {
+          "min": 3047.65541,
+          "max": 3050.70459
+        },
+        "stop": 3049.18,
+        "t1": 3003.44,
+        "t2": 2957.7,
+        "stopLoss": "3079.67",
+        "takeProfit1": "3003.44",
+        "takeProfit2": "2957.70",
+        "quantity": "0.3280",
+        "risk": "10.00",
+        "confluenceScore": 10,
+        "direction": "BEARISH",
+        "status": "BREAKEVEN",
+        "timestamp": 1764359890276,
+        "asset": "eth",
+        "reachedTarget1": true,
+        "reachedTarget2": false,
+        "entryOrderId": "PAPER_1764359890276",
+        "originalStop": 3079.67,
+        "outcome": "BREAKEVEN",
+        "profit": 0,
+        "recorded": true
+      },
+      "outcome": "BREAKEVEN",
+      "profit": 0,
+      "positionSize": 0.01,
+      "timestamp": 1764359890276,
+      "reachedTarget1": true,
+      "reachedTarget2": false,
+      "sessionActive": "",
+      "higherTFBias": "",
+      "higherTFStrength": 0,
+      "higherTFConfidence": "",
+      "volatilityLevel": "LOW",
+      "marketCondition": "RANGING",
+      "confluenceScore": 10,
+      "confluenceRating": "UNKNOWN",
+      "obDetected": false,
+      "obLevel": null,
+      "obStrength": "WEAK",
+      "fvgDetected": false,
+      "fvgTop": null,
+      "fvgBottom": null,
+      "fvgQuality": "LOW",
+      "confluenceFactors": [],
+      "confluenceCount": 0,
+      "signalQuality": "UNKNOWN",
+      "obEntryType": "MOMENTUM",
+      "obEntryQuality": "MODERATE",
+      "obDistancePercent": "N/A"
+    }
+  ],
+  "activeTrades": {
+    "btc": {
+      "symbol": "BTCUSDT",
+      "side": "SELL",
+      "entryPrice": 91146.39,
+      "entry": {
+        "min": 91100.81680500001,
+        "max": 91191.96319499999
+      },
+      "stop": 92057.85,
+      "t1": 89779.19,
+      "t2": 88412,
+      "stopLoss": "92057.85",
+      "takeProfit1": "89779.19",
+      "takeProfit2": "88412.00",
+      "quantity": "0.0110",
+      "risk": "10.00",
+      "confluenceScore": 8,
+      "direction": "BEARISH",
+      "status": "ACTIVE",
+      "timestamp": 1764359890270,
+      "asset": "btc",
+      "reachedTarget1": false,
+      "reachedTarget2": false,
+      "entryOrderId": "PAPER_1764359890272"
+    },
+    "eth": {
+      "symbol": "ETHUSDT",
+      "side": "SELL",
+      "entryPrice": 3049.24,
+      "entry": {
+        "min": 3047.71538,
+        "max": 3050.7646199999995
+      },
+      "stop": 3079.73,
+      "t1": 3003.5,
+      "t2": 2957.76,
+      "stopLoss": "3079.73",
+      "takeProfit1": "3003.50",
+      "takeProfit2": "2957.76",
+      "quantity": "0.9782",
+      "risk": "29.83",
+      "confluenceScore": 9,
+      "direction": "BEARISH",
+      "status": "ACTIVE",
+      "timestamp": 1764509104656,
+      "asset": "eth",
+      "reachedTarget1": false,
+      "reachedTarget2": false,
+      "entryOrderId": "PAPER_1764509104656"
+    }
+  },
+  "performance": {
+    "totalTrades": 1,
+    "winners": 0,
+    "losers": 0,
+    "breakevenTrades": 1,
+    "totalProfit": 0,
+    "winRate": 0,
+    "profitFactor": 0,
+    "avgWin": 0,
+    "avgLoss": 0,
+    "breakevenRate": 100
+  },
+  "patterns": {
+    "BEARISH_undefined_RANGING_LOW": {
+      "wins": 0,
+      "losses": 0,
+      "breakevenTrades": 1,
+      "weight": 1.05
+    }
+  },
+  "timestamp": 1764509104659
+}
