@@ -967,7 +967,6 @@ function calculateRiskAmount(confluenceRating) {
     
     return {
         riskAmount,
-        riskPercent,
         confluenceRating
     };
 }
@@ -3530,6 +3529,7 @@ async function generateAISetup(asset, price, confidence, momentum, smcData = nul
             quantity: positionSize,
             risk: riskAmount.toFixed(2),
             confluenceScore: smcData ? (smcData.confluence?.totalScore || confidence) : confidence,
+            smcData: smcData,
             direction: signalType,
             status: 'ACTIVE',
             timestamp: Date.now(),
@@ -3660,10 +3660,10 @@ function recordTradeOutcome(asset, setup, outcome, profit) {
         timestamp: setup.timestamp || Date.now(),
         reachedTarget1: setup.reachedTarget1 || false,
         reachedTarget2: setup.reachedTarget2 || false,
-        sessionActive: setup.sessionActive || '',
-        higherTFBias: setup.higherTFBias || '',
-        higherTFStrength: setup.higherTFStrength || 0,
-        higherTFConfidence: setup.higherTFConfidence || '',
+        sessionActive: setup.smcData?.session?.name || '',
+        higherTFBias: setup.smcData?.higherTimeframeBias?.direction || '',
+        higherTFStrength: setup.smcData?.higherTimeframeBias?.strength || 0,
+        higherTFConfidence: setup.smcData?.higherTimeframeBias?.confidence || '',
         volatilityLevel: setup.volatilityLevel || volatilityLevel,
         marketCondition: setup.marketCondition || marketCondition,
         confluenceScore: setup.confluenceScore || 0,
@@ -3681,9 +3681,12 @@ function recordTradeOutcome(asset, setup, outcome, profit) {
         confluenceCount: setup.smcData?.confluence?.factorsPresent?.length || 0,
         signalQuality: setup.confluenceRating || 'UNKNOWN',
         obEntryType: setup.obEntryType || 'MOMENTUM',  // NEW: OB Entry Type
-        obEntryQuality: setup.obEntryQuality || 'MODERATE',  // NEW: OB Entry Quality
+        obEntryQuality: setup.smcData?.obEntryQuality || 'MODERATE',  // NEW: OB Entry Quality
         obDistancePercent: setup.smcData?.orderBlock ? 
-            (calculateOBDistance(setup.entryPrice, setup.smcData.orderBlock)?.distancePercent?.toFixed(4) || 'N/A') : 'N/A'  // NEW: OB Distance %
+            (calculateOBDistance(setup.entryPrice, setup.smcData.orderBlock)?.distancePercent?.toFixed(4) || 'N/A') : 'N/A',  // NEW: OB Distance %
+        bosDetected: setup.smcData?.marketStructure?.bosDetected || false,
+        chochDetected: setup.smcData?.marketStructure?.chochDetected || false,
+        marketStructureTrend: setup.smcData?.marketStructure?.trend || 'UNKNOWN',
     };
     
     tradeDatabase.trades.push(trade);
@@ -3724,7 +3727,7 @@ function recordTradeOutcome(asset, setup, outcome, profit) {
 }
 
 function updatePatternWeights(setup, outcome) {
-    const patternKey = `${setup.direction}_${setup.confidence}_${marketCondition}_${volatilityLevel}`;
+    const patternKey = `${setup?.direction || 'UNKNOWN'}_${setup?.confluenceScore || 'UNKNOWN'}_${marketCondition}_${volatilityLevel}`;
     if (!tradeDatabase.patterns[patternKey]) {
         tradeDatabase.patterns[patternKey] = { wins: 0, losses: 0, breakevenTrades: 0, weight: 1.0 };
     }
@@ -3749,7 +3752,7 @@ async function updateTradeStatus(asset) {
     
     // Handle both old format (entry.min/max) and new format (entryPrice)
     let entryAvg;
-    if (trade.entry && trade.entry.min && trade.entry.max) {
+    if (trade.entry && trade.entry !== null && typeof trade.entry === 'object' && trade.entry.min != null && trade.entry.max != null) {
         entryAvg = (trade.entry.min + trade.entry.max) / 2;
     } else if (trade.entryPrice) {
         entryAvg = parseFloat(trade.entryPrice);
@@ -3812,8 +3815,12 @@ function adaptiveScan() {
     
     ['btc', 'eth'].forEach(async (asset) => {
         if (currentPrices[asset] > 0) {
-            // Always check exits first
-            await updateTradeStatus(asset);
+            try {
+                // Always check exits first
+                await updateTradeStatus(asset);
+            } catch (error) {
+                logger.warn('[ADAPTIVE SCAN] Error updating trade status:', error.message);
+            }
             
             // Then check for new signals
             if (!activeTrades[asset]) {
