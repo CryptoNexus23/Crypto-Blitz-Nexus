@@ -967,6 +967,7 @@ function calculateRiskAmount(confluenceRating) {
     
     return {
         riskAmount,
+        riskPercent,
         confluenceRating
     };
 }
@@ -3464,6 +3465,241 @@ let isProcessingTrade = false;
 let lastTradeExecutionTime = 0;
 const MIN_TRADE_INTERVAL = 5000; // 5 seconds between trades
 
+// ============================================
+// DIRECTION DETERMINATION FUNCTION
+// ============================================
+/**
+ * Determines trade direction based on majority vote of multiple signals
+ * @param {Object} smcData - Smart Money Concept data containing all market analysis
+ * @param {number} momentum - Current momentum value (positive = bullish, negative = bearish)
+ * @param {number} currentPrice - Current market price
+ * @returns {Object} { direction: 'BULLISH'|'BEARISH'|'NEUTRAL', confidence: 0-1, signals: {...}, reasoning: string }
+ */
+function determineTradeDirection(smcData, momentum, currentPrice) {
+    const signals = {
+        marketStructure: null,      // BULLISH, BEARISH, or null
+        htfBias: null,              // BULLISH, BEARISH, or null
+        momentum: null,             // BULLISH, BEARISH, or null
+        orderBlock: null            // BULLISH, BEARISH, or null
+    };
+    
+    const reasoning = [];
+    let bullishVotes = 0;
+    let bearishVotes = 0;
+    let totalSignals = 0;
+    
+    // ========== SIGNAL 1: Market Structure Analysis ==========
+    if (smcData?.marketStructure) {
+        const ms = smcData.marketStructure;
+        
+        // BoS (Break of Structure) detection
+        if (ms.bosDetected && ms.trend === 'bullish') {
+            signals.marketStructure = 'BULLISH';
+            bullishVotes++;
+            totalSignals++;
+            reasoning.push('Market Structure: BoS detected with bullish trend');
+        } else if (ms.chochDetected && ms.trend === 'bearish') {
+            signals.marketStructure = 'BEARISH';
+            bearishVotes++;
+            totalSignals++;
+            reasoning.push('Market Structure: CHoCH detected with bearish trend');
+        }
+        // Higher Highs + Higher Lows = Bullish
+        else if (ms.higherHighs >= 1 && ms.higherLows >= 1) {
+            signals.marketStructure = 'BULLISH';
+            bullishVotes++;
+            totalSignals++;
+            reasoning.push(`Market Structure: Higher Highs (${ms.higherHighs}) + Higher Lows (${ms.higherLows}) = Bullish`);
+        }
+        // Lower Highs + Lower Lows = Bearish
+        else if (ms.lowerHighs >= 1 && ms.lowerLows >= 1) {
+            signals.marketStructure = 'BEARISH';
+            bearishVotes++;
+            totalSignals++;
+            reasoning.push(`Market Structure: Lower Highs (${ms.lowerHighs}) + Lower Lows (${ms.lowerLows}) = Bearish`);
+        } else {
+            reasoning.push('Market Structure: Neutral (no clear structure)');
+        }
+    } else {
+        reasoning.push('Market Structure: Not available');
+    }
+    
+    // ========== SIGNAL 2: Higher Timeframe Bias ==========
+    if (smcData?.higherTimeframeBias) {
+        const htf = smcData.higherTimeframeBias;
+        
+        if (htf.bias === 'bullish' && htf.confidence === 'high') {
+            signals.htfBias = 'BULLISH';
+            bullishVotes++;
+            totalSignals++;
+            reasoning.push(`HTF Bias: Bullish (EMA20 > EMA50, strength: ${htf.strength.toFixed(2)}%, confidence: high)`);
+        } else if (htf.bias === 'bullish' && htf.confidence === 'medium') {
+            signals.htfBias = 'BULLISH';
+            bullishVotes += 0.75; // Reduced weight for medium confidence
+            totalSignals += 0.75;
+            reasoning.push(`HTF Bias: Bullish (EMA20 > EMA50, strength: ${htf.strength.toFixed(2)}%, confidence: medium - reduced weight)`);
+        } else if (htf.bias === 'bearish' && htf.confidence === 'high') {
+            signals.htfBias = 'BEARISH';
+            bearishVotes++;
+            totalSignals++;
+            reasoning.push(`HTF Bias: Bearish (EMA20 < EMA50, strength: ${htf.strength.toFixed(2)}%, confidence: high)`);
+        } else if (htf.bias === 'bearish' && htf.confidence === 'medium') {
+            signals.htfBias = 'BEARISH';
+            bearishVotes += 0.75; // Reduced weight for medium confidence
+            totalSignals += 0.75;
+            reasoning.push(`HTF Bias: Bearish (EMA20 < EMA50, strength: ${htf.strength.toFixed(2)}%, confidence: medium - reduced weight)`);
+        } else if (htf.bias === 'neutral') {
+            reasoning.push('HTF Bias: Neutral (EMA20 ≈ EMA50) - no vote');
+        } else {
+            reasoning.push(`HTF Bias: ${htf.bias} but confidence too low - no vote`);
+        }
+    } else {
+        reasoning.push('HTF Bias: Not available');
+    }
+    
+    // ========== SIGNAL 3: Momentum Direction ==========
+    if (momentum !== null && momentum !== undefined) {
+        const momentumThreshold = 0.001; // Small threshold to avoid noise
+        
+        if (momentum > momentumThreshold) {
+            signals.momentum = 'BULLISH';
+            bullishVotes++;
+            totalSignals++;
+            reasoning.push(`Momentum: Bullish (recent price changes average: +${(momentum * 100).toFixed(2)}%)`);
+        } else if (momentum < -momentumThreshold) {
+            signals.momentum = 'BEARISH';
+            bearishVotes++;
+            totalSignals++;
+            reasoning.push(`Momentum: Bearish (recent price changes average: ${(momentum * 100).toFixed(2)}%)`);
+        } else {
+            signals.momentum = null;
+            reasoning.push(`Momentum: Neutral (average change: ${(momentum * 100).toFixed(2)}% - too small)`);
+        }
+    } else {
+        reasoning.push('Momentum: Not available');
+    }
+    
+    // ========== SIGNAL 4: Order Block Type ==========
+    if (smcData?.orderBlock) {
+        const ob = smcData.orderBlock;
+        
+        if (ob.type === 'bullish' || ob.type === 'demand') {
+            signals.orderBlock = 'BULLISH';
+            bullishVotes++;
+            totalSignals++;
+            reasoning.push(`Order Block: Demand/Bullish block detected (quality: ${ob.qualityScore})`);
+        } else if (ob.type === 'bearish' || ob.type === 'supply') {
+            signals.orderBlock = 'BEARISH';
+            bearishVotes++;
+            totalSignals++;
+            reasoning.push(`Order Block: Supply/Bearish block detected (quality: ${ob.qualityScore})`);
+        } else {
+            reasoning.push(`Order Block: Type unclear (${ob.type}) - no vote`);
+        }
+    } else {
+        reasoning.push('Order Block: Not available');
+    }
+    
+    // ========== CALCULATE FINAL DIRECTION ==========
+    let direction = 'NEUTRAL';
+    let confidence = 0;
+    
+    if (totalSignals === 0) {
+        reasoning.push('RESULT: No signals available - NEUTRAL');
+        return {
+            direction: 'NEUTRAL',
+            confidence: 0,
+            signals: signals,
+            reasoning: reasoning.join(' | ')
+        };
+    }
+    
+    // Calculate confidence as agreement ratio
+    const maxVotes = Math.max(bullishVotes, bearishVotes);
+    confidence = totalSignals > 0 ? maxVotes / totalSignals : 0;
+    
+    // Determine direction by majority vote
+    if (bullishVotes > bearishVotes && confidence >= 0.5) {
+        direction = 'BULLISH';
+        reasoning.push(`RESULT: BULLISH (${bullishVotes.toFixed(2)}/${totalSignals.toFixed(2)} signals, confidence: ${(confidence * 100).toFixed(1)}%)`);
+    } else if (bearishVotes > bullishVotes && confidence >= 0.5) {
+        direction = 'BEARISH';
+        reasoning.push(`RESULT: BEARISH (${bearishVotes.toFixed(2)}/${totalSignals.toFixed(2)} signals, confidence: ${(confidence * 100).toFixed(1)}%)`);
+    } else {
+        // Tie or insufficient confidence
+        direction = 'NEUTRAL';
+        if (bullishVotes === bearishVotes) {
+            reasoning.push(`RESULT: NEUTRAL - Tie vote (${bullishVotes.toFixed(2)} vs ${bearishVotes.toFixed(2)})`);
+        } else {
+            reasoning.push(`RESULT: NEUTRAL - Insufficient confidence (${(confidence * 100).toFixed(1)}% < 50% threshold)`);
+        }
+    }
+    
+    return {
+        direction: direction,
+        confidence: confidence,
+        signals: signals,
+        reasoning: reasoning.join(' | ')
+    };
+}
+
+/**
+ * Validates that entry/stop/target prices align with trade direction
+ * @param {string} direction - 'BULLISH' or 'BEARISH'
+ * @param {number} entryPrice - Entry price
+ * @param {number} stopPrice - Stop loss price
+ * @param {number} target1 - First target price
+ * @param {number} target2 - Second target price
+ * @param {number} currentPrice - Current market price
+ * @returns {Object} { valid: boolean, errors: string[] }
+ */
+function validateDirectionAlignment(direction, entryPrice, stopPrice, target1, target2, currentPrice) {
+    const errors = [];
+    
+    if (direction === 'BULLISH') {
+        // For LONG trades:
+        // - Entry should be near current price (within reasonable range)
+        // - Stop should be BELOW entry
+        // - Targets should be ABOVE entry
+        
+        if (stopPrice >= entryPrice) {
+            errors.push(`BULLISH: Stop (${stopPrice}) must be BELOW entry (${entryPrice})`);
+        }
+        if (target1 <= entryPrice) {
+            errors.push(`BULLISH: Target 1 (${target1}) must be ABOVE entry (${entryPrice})`);
+        }
+        if (target2 <= entryPrice) {
+            errors.push(`BULLISH: Target 2 (${target2}) must be ABOVE entry (${entryPrice})`);
+        }
+        if (target2 <= target1) {
+            errors.push(`BULLISH: Target 2 (${target2}) must be ABOVE Target 1 (${target1})`);
+        }
+    } else if (direction === 'BEARISH') {
+        // For SHORT trades:
+        // - Entry should be near current price (within reasonable range)
+        // - Stop should be ABOVE entry
+        // - Targets should be BELOW entry
+        
+        if (stopPrice <= entryPrice) {
+            errors.push(`BEARISH: Stop (${stopPrice}) must be ABOVE entry (${entryPrice})`);
+        }
+        if (target1 >= entryPrice) {
+            errors.push(`BEARISH: Target 1 (${target1}) must be BELOW entry (${entryPrice})`);
+        }
+        if (target2 >= entryPrice) {
+            errors.push(`BEARISH: Target 2 (${target2}) must be BELOW entry (${entryPrice})`);
+        }
+        if (target2 >= target1) {
+            errors.push(`BEARISH: Target 2 (${target2}) must be BELOW Target 1 (${target1})`);
+        }
+    }
+    
+    return {
+        valid: errors.length === 0,
+        errors: errors
+    };
+}
+
 async function generateAISetup(asset, price, confidence, momentum, smcData = null) {
     try {
         // SAFE EQUITY CHECK - Handles object vs number
@@ -3487,16 +3723,45 @@ async function generateAISetup(asset, price, confidence, momentum, smcData = nul
             return null;
         }
 
-        // Basic Risk Calculation (1% risk)
-        const riskAmount = currentEquityVal * 0.01;
+        // Extract confluence result from smcData
+        const confluenceResult = smcData?.confluence || null;
+        
+        // CHANGE 3 (CRITICAL): Skip trades with insufficient confluence quality
+        if (!confluenceResult || confluenceResult.positionSizeMultiplier === 0) {
+            logger.info(`[AI SETUP] Confluence multiplier is 0 - skipping trade. Quality too low.`);
+            return null;
+        }
+
+        // ========== EXPLICIT DIRECTION DETERMINATION ==========
+        // Determine trade direction based on majority vote of confluence signals
+        const directionResult = determineTradeDirection(smcData, momentum, currentPrice);
+        
+        // Log direction analysis
+        logger.info(`[AI SETUP] Direction Analysis for ${asset.toUpperCase()}:`, {
+            direction: directionResult.direction,
+            confidence: `${(directionResult.confidence * 100).toFixed(1)}%`,
+            signals: directionResult.signals,
+            reasoning: directionResult.reasoning
+        });
+        
+        // CRITICAL: Skip trades if direction is NEUTRAL or confidence is too low
+        if (directionResult.direction === 'NEUTRAL' || directionResult.confidence < 0.5) {
+            logger.warn(`[AI SETUP] ❌ Skipping trade - Direction: ${directionResult.direction}, Confidence: ${(directionResult.confidence * 100).toFixed(1)}% (minimum 50% required)`);
+            logger.warn(`[AI SETUP] Reasoning: ${directionResult.reasoning}`);
+            return null;
+        }
+        
+        const signalType = directionResult.direction; // Use explicitly determined direction
+        
+        // CHANGE 1: Use confluence quality rating for risk calculation
+        const riskData = calculateRiskAmount(confluenceResult.qualityRating);
+        const riskAmount = riskData.riskAmount;
         const stopLossPercent = 0.01; // 1% stop loss distance
         
         let entryPrice = currentPrice;
         let stopLoss = 0;
         let takeProfit1 = 0;
         let takeProfit2 = 0;
-
-        const signalType = momentum > 0 ? 'BULLISH' : 'BEARISH';
         if (signalType === 'BULLISH') {
             stopLoss = entryPrice * (1 - stopLossPercent);
             takeProfit1 = entryPrice * (1 + (stopLossPercent * 1.5));
@@ -3509,7 +3774,52 @@ async function generateAISetup(asset, price, confidence, momentum, smcData = nul
 
         // Calculate Position Size
         const priceDistance = Math.abs(entryPrice - stopLoss);
-        const positionSize = (riskAmount / priceDistance).toFixed(4);
+        let positionSize = riskAmount / priceDistance;
+        
+        // CHANGE 2: Apply confluence multiplier to position size
+        positionSize *= confluenceResult.positionSizeMultiplier;
+        
+        // EDGE CASE: If confluence is high but direction confidence is weak, reduce position size
+        if (confluenceResult.totalScore >= 10 && directionResult.confidence < 0.75) {
+            const reductionFactor = 0.5;
+            positionSize *= reductionFactor;
+            logger.warn(`[AI SETUP] ⚠️ High confluence (${confluenceResult.totalScore}) but weak direction confidence (${(directionResult.confidence * 100).toFixed(1)}%) - Reducing position size by 50%`);
+        }
+        
+        positionSize = positionSize.toFixed(4);
+
+        // ========== VALIDATE DIRECTION ALIGNMENT ==========
+        const validation = validateDirectionAlignment(
+            signalType,
+            entryPrice,
+            stopLoss,
+            takeProfit1,
+            takeProfit2,
+            currentPrice
+        );
+        
+        if (!validation.valid) {
+            logger.error(`[AI SETUP] ❌ Direction validation FAILED for ${asset.toUpperCase()}:`, {
+                direction: signalType,
+                entry: entryPrice,
+                stop: stopLoss,
+                target1: takeProfit1,
+                target2: takeProfit2,
+                errors: validation.errors
+            });
+            return null;
+        }
+        
+        // Log successful validation
+        logger.info(`[AI SETUP] ✅ Direction validation PASSED for ${asset.toUpperCase()}:`, {
+            direction: signalType,
+            entry: entryPrice.toFixed(2),
+            stop: stopLoss.toFixed(2),
+            target1: takeProfit1.toFixed(2),
+            target2: takeProfit2.toFixed(2),
+            directionConfidence: `${(directionResult.confidence * 100).toFixed(1)}%`,
+            confluenceQuality: confluenceResult.qualityRating
+        });
 
         const entryPriceNum = parseFloat(entryPrice);
         const setup = {
@@ -3543,6 +3853,29 @@ async function generateAISetup(asset, price, confidence, momentum, smcData = nul
         const entrySide = setup.side;
         const quantity = parseFloat(setup.quantity);
         
+        // ========== FINAL TRADE DECISION LOG ==========
+        logger.info(`[AI SETUP] 🎯 FINAL TRADE DECISION for ${asset.toUpperCase()}:`, {
+            direction: signalType,
+            side: entrySide,
+            entryPrice: entryPrice.toFixed(2),
+            stopLoss: stopLoss.toFixed(2),
+            target1: takeProfit1.toFixed(2),
+            target2: takeProfit2.toFixed(2),
+            quantity: quantity,
+            riskAmount: riskAmount.toFixed(2),
+            directionConfidence: `${(directionResult.confidence * 100).toFixed(1)}%`,
+            confluenceScore: confluenceResult.totalScore,
+            confluenceQuality: confluenceResult.qualityRating,
+            positionSizeMultiplier: confluenceResult.positionSizeMultiplier,
+            signals: {
+                marketStructure: directionResult.signals.marketStructure || 'N/A',
+                htfBias: directionResult.signals.htfBias || 'N/A',
+                momentum: directionResult.signals.momentum || 'N/A',
+                orderBlock: directionResult.signals.orderBlock || 'N/A'
+            },
+            decision: 'GO - All validations passed'
+        });
+        
         logger.info(`[AI SETUP] Executing trade: ${entrySide} ${quantity} ${symbol} @ $${entryPrice.toFixed(2)}`);
         
         const entryOrder = await placeMarketOrder(symbol, entrySide, quantity);
@@ -3562,6 +3895,16 @@ async function generateAISetup(asset, price, confidence, momentum, smcData = nul
             activeTrades[asset] = setup;
             tradeDatabase.activeTrades[asset] = setup;
             await saveTradeData();
+            
+            // Extract session and higherTimeframeBias from smcData if available
+            const session = smcData?.session;
+            const higherTimeframeBias = smcData?.higherTimeframeBias;
+            
+            // Store Session Active and Higher TF Bias data in setup object
+            setup.sessionActive = session?.sessionName;
+            setup.higherTFBias = higherTimeframeBias?.bias;
+            setup.higherTFStrength = higherTimeframeBias?.strength;
+            setup.higherTFConfidence = higherTimeframeBias?.confidence;
             
             return setup;
         } else {
@@ -3776,7 +4119,13 @@ async function updateTradeStatus(asset) {
         trade.status = 'TARGET2_HIT';
         trade.outcome = 'WIN';
         trade.profit = profit;
+        const outcome = 'WIN';
         recordTradeOutcome(asset, trade, 'WIN', profit);
+        if (outcome === 'WIN') {
+            paperBalance += profit;
+        } else if (outcome === 'LOSS') {
+            paperBalance -= profit;
+        }
         activeTrades[asset] = null;
         tradeDatabase.activeTrades[asset] = null;
         await saveTradeData();
@@ -3789,6 +4138,7 @@ async function updateTradeStatus(asset) {
         trade.outcome = 'BREAKEVEN';
         trade.profit = 0;
         recordTradeOutcome(asset, trade, 'BREAKEVEN', 0);
+        // BREAKEVEN: no profit/loss, balance unchanged
         activeTrades[asset] = null;
         tradeDatabase.activeTrades[asset] = null;
         await saveTradeData();
@@ -3801,7 +4151,13 @@ async function updateTradeStatus(asset) {
         trade.status = 'STOPPED';
         trade.outcome = 'LOSS';
         trade.profit = -loss;
+        const outcome = 'LOSS';
         recordTradeOutcome(asset, trade, 'LOSS', loss);
+        if (outcome === 'WIN') {
+            paperBalance += Math.abs(trade.profit);
+        } else if (outcome === 'LOSS') {
+            paperBalance -= loss;
+        }
         activeTrades[asset] = null;
         tradeDatabase.activeTrades[asset] = null;
         await saveTradeData();
@@ -3845,7 +4201,13 @@ app.get('/api/data', async (req, res) => {
             ...tradeDatabase,
             activeTrades: activeTrades,
             currentPrices: currentPrices,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            accountBalance: {
+                current: paperBalance,
+                equity: accountState.currentEquity || 0,
+                totalProfit: tradeDatabase.performance.totalProfit || 0,
+                startingBalance: 10000
+            }
         };
         res.json(data);
     } catch (err) {
